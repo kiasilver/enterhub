@@ -1,0 +1,4 @@
+-- Chat rich features + workspace letters (applied via prisma db push)
+-- Tables: chat_reactions, chat_attachments, chat_message_mentions,
+--         saved_chat_messages, workspace_letters
+-- ChatMessage columns: replyToId, editedAt, deletedAt

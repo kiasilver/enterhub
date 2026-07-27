@@ -1,0 +1,1669 @@
+// =============================================================================
+// ENTERHUB - Multi-Tenant SaaS Prisma Schema (PostgreSQL)
+// Architected for: Super Admin | Org Admin | Board Admin | Member | Guest
+// Cascades: Workspace -> Boards -> Lists -> Cards -> Comments/Attachments
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+/// Commercial plan tier for a Workspace (tenant).
+enum PlanTier {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+/// Lifecycle of a tenant. Soft-delete = SUSPENDED; hard-delete after grace period.
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_DELETE
+  DELETED
+}
+
+/// Board visibility controls (Board Admin).
+enum BoardVisibility {
+  PRIVATE // invited members only
+  WORKSPACE // any workspace member
+  PUBLIC // share link (optional password / expiry)
+}
+
+enum DepartmentMemberRole {
+  /// Department head — final invite approval, manage roster
+  MANAGER
+  /// Team lead — can invite; approval needs manager unless no manager exists
+  SUPERVISOR
+  /// Employee / intern / contributor
+  MEMBER
+}
+
+enum WorkspaceInviteStatus {
+  /// Waiting for invitee to accept
+  PENDING_ACCEPT
+  /// Invitee accepted — waiting for department manager (or supervisor if none)
+  PENDING_APPROVAL
+  /// Fully joined (ACTIVE membership)
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+/// Membership status within a workspace.
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+/// Company size band collected during onboarding.
+enum EmployeeBand {
+  SOLO // 1
+  SMALL // 2–10
+  MEDIUM // 11–50
+  LARGE // 51+
+}
+
+/// Guest/observer contribution level on a board.
+enum GuestAccessLevel {
+  READ_ONLY
+  COMMENT_ONLY
+  ASSIGNED_ONLY // only cards assigned to them
+}
+
+/// Default board view for members entering a board.
+enum BoardDefaultView {
+  KANBAN
+  LIST
+  TIMELINE
+  CALENDAR
+}
+
+/// Task priority for cards.
+enum CardPriority {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Work lifecycle: manager assigns → employee starts → submit → manager approve + evaluate
+enum CardWorkflowStatus {
+  ASSIGNED
+  IN_PROGRESS
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum ExtensionUnit {
+  HOURS
+  DAYS
+}
+
+enum ExtensionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ScheduleChangeSource {
+  EXTENSION_APPROVED
+  MANAGER_ADJUST
+  /// Overdue task rescheduled with reason — no delay penalty; still in stats as waived
+  DELAY_RESCHEDULE
+}
+
+enum DelayIncidentStatus {
+  OPEN
+  CHARGED
+  WAIVED
+}
+
+// -----------------------------------------------------------------------------
+// Identity — global users (Super Admin flag lives here; no tenant data access)
+// -----------------------------------------------------------------------------
+
+/// Global identity. Super Admins manage infrastructure / tenants, not card body content.
+model User {
+  id           String   @id @default(cuid())
+  /// Optional for phone-only accounts; unique when set.
+  email        String?  @unique
+  /// Null for Google-only accounts until a password is set.
+  passwordHash String?
+  name         String?
+  firstName    String?
+  lastName     String?
+  birthday     DateTime?
+  /// Iranian mobile normalized as 09xxxxxxxxx; unique when set.
+  phone        String?  @unique
+  phoneVerifiedAt DateTime?
+  avatarUrl    String?
+  /// Google OAuth subject (Auth.js).
+  googleId     String?  @unique
+  /// Canonical presence: available | meeting | away | leave
+  presenceStatus    String    @default("available")
+  presenceUpdatedAt DateTime?
+  /// Platform owner / SaaS operator. Never grant by workspace Role.
+  isSuperAdmin Boolean  @default(false)
+  /// SA / abuse control — blocks login when set.
+  blockedAt          DateTime?
+  blockedReason      String?
+  /// TOTP secret for 2FA (encrypted at rest in production).
+  twoFactorSecret    String?  @map("2fa_secret")
+  twoFactorEnabled   Boolean  @default(false) @map("2fa_enabled")
+  emailVerifiedAt    DateTime?
+  lastLoginAt        DateTime?
+  /// When true, user still needs to finish company onboarding wizard (if they chose "I have a company").
+  pendingOnboarding  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  memberships     WorkspaceMember[]
+  comments        Comment[]
+  attachments     Attachment[]
+  mediaAssets     MediaAsset[]
+  activityLogs    ActivityLog[]     @relation("ActorLogs")
+  cardAssignees   CardAssignee[]
+  createdCards    Card[]            @relation("CardCreator")
+  approvedCards   Card[]            @relation("CardApprover")
+  cardViews       CardView[]
+  createdLabels   WorkspaceLabel[]  @relation("LabelCreator")
+  notifications   Notification[]    @relation("NotificationRecipient")
+  actedNotifications Notification[] @relation("NotificationActor")
+  evaluationsGiven   CardEvaluation[] @relation("EvaluationEvaluator")
+  evaluationsReceived CardEvaluation[] @relation("EvaluationEmployee")
+  sessions        Session[]
+  boardGuests     BoardGuest[]
+  emailOtps       EmailOtp[]
+  phoneOtps       PhoneOtp[]
+  chatMemberships ChatRoomMember[]
+  chatMessages    ChatMessage[]
+  chatReactions   ChatReaction[]
+  chatMentions    ChatMessageMention[]
+  savedChatMessages SavedChatMessage[]
+  mailSent        MailMessage[] @relation("MailFrom")
+  mailReceived    MailMessage[] @relation("MailTo")
+  connectedMailboxes ConnectedMailbox[]
+  googleSheetsConnections GoogleSheetsConnection[]
+  externalMails   ExternalMailMessage[]
+  lettersSent     WorkspaceLetter[] @relation("LetterFrom")
+  lettersReceived WorkspaceLetter[] @relation("LetterTo")
+  calendarEventsCreated CalendarEvent[] @relation("CalendarEventCreator")
+  calendarEventAttendees CalendarEventAttendee[]
+  departmentMemberships DepartmentMember[]
+  invitesSent       WorkspaceInvite[] @relation("InviteSender")
+  invitesReceived   WorkspaceInvite[] @relation("InviteRecipient")
+  invitesApproved   WorkspaceInvite[] @relation("InviteApprover")
+  extensionRequestsMade     CardExtensionRequest[] @relation("ExtensionRequester")
+  extensionRequestsReviewed CardExtensionRequest[] @relation("ExtensionReviewer")
+  scheduleChangesMade       CardScheduleChange[]   @relation("ScheduleChanger")
+  delayIncidentsAsEmployee  CardDelayIncident[]    @relation("DelayEmployee")
+  delayIncidentsCharged     CardDelayIncident[]    @relation("DelayCharger")
+  delayIncidentsWaived      CardDelayIncident[]    @relation("DelayWaiver")
+  loginAttempts     LoginAttempt[]
+  notificationPrefs UserNotificationPrefs?
+  supportTickets    SupportTicket[] @relation("TicketRequester")
+  supportMessages   SupportMessage[]
+  planPurchaseRequests PlanPurchaseRequest[]
+  c2cReviews           PlanPurchaseRequest[] @relation("C2CReviewer")
+
+  @@index([email])
+  @@index([phone])
+  @@index([isSuperAdmin])
+  @@index([blockedAt])
+  @@map("users")
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  userId    String?
+  email     String
+  success   Boolean
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([email, createdAt])
+  @@map("login_attempts")
+}
+
+model UserNotificationPrefs {
+  id               String  @id @default(cuid())
+  userId           String  @unique
+  emailEnabled     Boolean @default(true)
+  /// In-app (Nexus) notifications
+  inAppEnabled     Boolean @default(true)
+  telegramEnabled  Boolean @default(false)
+  telegramChatId   String?
+  telegramUsername String?
+  /// Granular channels (JSON): chatMention, letter, mail, assignment — each { inApp, telegram, email }
+  channels         Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_notification_prefs")
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SupportAuthorRole {
+  USER
+  SUPERADMIN
+}
+
+model SupportTicket {
+  id          String                @id @default(cuid())
+  userId      String
+  workspaceId String?
+  subject     String
+  category    String                @default("general")
+  status      SupportTicketStatus   @default(OPEN)
+  priority    SupportTicketPriority @default(MEDIUM)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  user     User             @relation("TicketRequester", fields: [userId], references: [id], onDelete: Cascade)
+  messages SupportMessage[]
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id         String            @id @default(cuid())
+  ticketId   String
+  authorId   String
+  authorRole SupportAuthorRole
+  body       String
+  createdAt  DateTime          @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
+}
+
+/// Email OTP codes for verification / login (production). Skipped automatically on localhost.
+model EmailOtp {
+  id         String    @id @default(cuid())
+  email      String
+  userId     String?
+  /// bcrypt hash of 6-digit code
+  codeHash   String
+  purpose    String // register | login | verify_email
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose])
+  @@index([expiresAt])
+  @@map("email_otps")
+}
+
+/// Optional persisted session metadata (force-logout / Redis JWT jti correlation).
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  /// JWT ID — revoke by marking revokedAt.
+  jti       String   @unique
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([jti])
+  @@map("sessions")
+}
+
+// -----------------------------------------------------------------------------
+// Tenant — Workspace
+// -----------------------------------------------------------------------------
+
+/// Tenant root. All boards/lists/cards hang under a workspace.
+model Workspace {
+  id     String @id @default(cuid())
+  name   String
+  slug   String @unique
+  /// Billing plan for quota / feature gates.
+  planTier PlanTier @default(FREE)
+  status   WorkspaceStatus @default(ACTIVE)
+  ownerId  String
+  /// Soft-delete / pending hard-delete scheduling (e.g. +30 days).
+  suspendedAt       DateTime?
+  pendingDeleteAt   DateTime?
+  deletedAt         DateTime?
+  /// Optional custom rate-limit override (requests/min) for noisy-neighbor control.
+  rateLimitPerMinute Int?
+  /// Captured signup domain (Org Admin Domain Capture), e.g. "company.com"
+  capturedDomain     String?
+  /// Seat capacity purchased.
+  seatLimit          Int @default(5)
+  /// Gift seats included with plan (e.g. +2 on Base).
+  giftSeats          Int @default(0)
+  /// Guest / external seats (Advanced plan).
+  guestSeatLimit     Int @default(0)
+  /// Cloud storage included with plan (megabytes). Free = 150.
+  storageLimitMb     Int @default(150)
+  /// Extra cloud purchased as add-on (megabytes), independent of plan upgrade.
+  extraStorageMb     Int @default(0)
+  /// End of paid period. Null = forever (Free plan).
+  planExpiresAt      DateTime?
+  /// SA manual note for custom grants / bonuses.
+  customPlanNote     String?
+  /// Extra complimentary days stacked onto paid period (SA).
+  bonusDays          Int @default(0)
+  /// yearly | monthly
+  billingCycle       String  @default("yearly")
+  /// Org security: require 2FA for all members before workspace access.
+  enforce2FA             Boolean @default(false)
+  /// Idle / absolute session lifetime in hours (Org Admin policy).
+  sessionTimeoutHours    Int     @default(24)
+  /// Allowed CIDR blocks as JSON string array, e.g. ["10.0.0.0/8","203.0.113.0/24"]. Empty = no IP restriction.
+  ipAllowlist            Json?
+  /// Branding: light-mode / default logo URL (or data URL). Null → letter avatar.
+  logoUrl                String?
+  /// Optional dark-mode logo. If null, light logo is shown with inverted colors in dark theme.
+  logoUrlDark            String?
+  /// Hex background for letter-avatar fallback (e.g. #3B82F6).
+  logoColor              String?
+  /// Size band from onboarding.
+  employeeBand           EmployeeBand?
+  /// Selected department keys JSON string[], e.g. ["finance","it","hr","marketing"].
+  departments            Json?
+  /// Founder's preferred title in this tenant (Founder, CEO, …).
+  ownerTitle             String?
+  /// Onboarding wizard finished.
+  onboardingCompletedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members WorkspaceMember[]
+  roles   Role[]
+  boards  Board[]
+  activityLogs ActivityLog[]
+  featureOverrides WorkspaceFeatureFlag[]
+  mediaAssets MediaAsset[]
+  notifications Notification[]
+  labels      WorkspaceLabel[]
+  chatRooms   ChatRoom[]
+  mailMessages MailMessage[]
+  connectedMailboxes ConnectedMailbox[]
+  googleSheetsConnections GoogleSheetsConnection[]
+  externalMails ExternalMailMessage[]
+  letters     WorkspaceLetter[]
+  savedChatMessages SavedChatMessage[]
+  calendarEvents CalendarEvent[]
+  cardEvaluations CardEvaluation[]
+  departmentRows  Department[]
+  workspaceInvites WorkspaceInvite[]
+  extensionRequests CardExtensionRequest[]
+  scheduleChanges   CardScheduleChange[]
+  delayIncidents    CardDelayIncident[]
+  planPurchaseRequests PlanPurchaseRequest[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([planTier])
+  @@map("workspaces")
+}
+
+/// Org unit (IT, Finance, …) — projects (boards) and members hang off this.
+model Department {
+  id          String    @id @default(cuid())
+  workspaceId String
+  /// Stable key e.g. "it", "finance"
+  key         String
+  name        String
+  /// Hex accent for Kanban column headers
+  color       String    @default("#3B82F6")
+  /// Material Icons ligature name (e.g. "computer", "account_balance") — SVG via material-icons font
+  icon        String    @default("business")
+  order       Float     @default(0)
+  /// Soft-disable: hidden from active workflows until re-enabled
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   DepartmentMember[]
+  boards    Board[]
+  invites   WorkspaceInvite[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, order])
+  @@index([workspaceId, archivedAt])
+  @@map("departments")
+}
+
+model DepartmentMember {
+  id           String               @id @default(cuid())
+  departmentId String
+  userId       String
+  role         DepartmentMemberRole @default(MEMBER)
+  createdAt    DateTime             @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userId])
+  @@index([userId])
+  @@map("department_members")
+}
+
+/// Department-scoped invite: accept by employee → approve by manager (or supervisor if no manager).
+model WorkspaceInvite {
+  id              String                @id @default(cuid())
+  workspaceId     String
+  departmentId    String?
+  email           String
+  /// Target user once known / created
+  inviteeUserId   String?
+  invitedById     String
+  approvedById    String?
+  /// Workspace Role to assign on accept+approve
+  roleId          String
+  /// Department role once approved
+  departmentRole  DepartmentMemberRole  @default(MEMBER)
+  status          WorkspaceInviteStatus @default(PENDING_ACCEPT)
+  token           String                @unique @default(cuid())
+  note            String?
+  acceptedAt      DateTime?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  rejectionNote   String?
+  expiresAt       DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  invitee    User?       @relation("InviteRecipient", fields: [inviteeUserId], references: [id], onDelete: SetNull)
+  invitedBy  User        @relation("InviteSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  approvedBy User?       @relation("InviteApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  role       Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, status])
+  @@index([email])
+  @@index([inviteeUserId, status])
+  @@index([departmentId, status])
+  @@map("workspace_invites")
+}
+
+/// Join: User ↔ Workspace with a custom Role (RBAC).
+model WorkspaceMember {
+  id          String           @id @default(cuid())
+  workspaceId String
+  userId      String
+  roleId      String
+  status      MembershipStatus @default(ACTIVE)
+  /// Display job title / position label (e.g. Founder, CEO, Accountant).
+  title       String?
+  joinedAt    DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Custom (or seeded) role for this membership — Permission matrix via RolePermission.
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("workspace_members")
+}
+
+// -----------------------------------------------------------------------------
+// RBAC — custom roles per workspace + global permission catalog
+// -----------------------------------------------------------------------------
+
+/// Workspace-scoped role (e.g. "Finance Manager", "HR Manager", "Org Admin").
+/// workspaceId = null reserved for system templates cloned into new tenants.
+model Role {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  workspaceId String?
+  /// System roles cannot be deleted by Org Admins (e.g. OWNER, MEMBER, GUEST template).
+  isSystem    Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  members     WorkspaceMember[]
+  invites     WorkspaceInvite[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("roles")
+}
+
+/// Global permission catalog. actionName examples: board:create, card:delete, billing:read
+model Permission {
+  id          String @id @default(cuid())
+  actionName  String @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Many-to-many: Role ↔ Permission.
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// -----------------------------------------------------------------------------
+// Boards / Lists / Cards (Kanban)
+// -----------------------------------------------------------------------------
+
+model Board {
+  id           String          @id @default(cuid())
+  workspaceId  String
+  departmentId String?
+  name         String
+  description  String?
+  background   String? // CSS / image URL
+  visibility   BoardVisibility @default(PRIVATE)
+  defaultView  BoardDefaultView @default(KANBAN)
+  /// Public link controls (when visibility = PUBLIC)
+  publicToken     String?   @unique
+  publicPassword  String? // hashed
+  publicExpiresAt DateTime?
+  archivedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace  Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  lists     List[]
+  guests    BoardGuest[]
+  activityLogs ActivityLog[]
+  webhooks  BoardWebhook[]
+  automations BoardAutomation[]
+  customFields BoardCustomField[]
+  googleSheetSyncLinks GoogleSheetSyncLink[]
+
+  @@index([workspaceId])
+  @@index([departmentId])
+  @@map("boards")
+}
+
+/// External collaborators scoped to a single board (Guest / Observer).
+model BoardGuest {
+  id          String           @id @default(cuid())
+  boardId     String
+  userId      String
+  accessLevel GuestAccessLevel @default(READ_ONLY)
+  createdAt   DateTime         @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+  @@map("board_guests")
+}
+
+/// Kanban column. Deleting a List cascades to its Cards.
+model List {
+  id        String    @id @default(cuid())
+  boardId   String
+  title     String
+  /// Fractional / integer order within the board (DnD).
+  order     Float     @default(0)
+  archivedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  board Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards Card[]
+
+  @@index([boardId, order])
+  @@map("lists")
+}
+
+model Card {
+  id          String    @id @default(cuid())
+  listId      String
+  title       String
+  description String?
+  /// Order within the list (DnD / @hello-pangea/dnd).
+  order       Float     @default(0)
+  dueDate     DateTime?
+  /// Range start for the due window (dueDate = end).
+  startDate   DateTime?
+  priority    CardPriority @default(NONE)
+  /// Manager-set expected effort (hours) before employee can start.
+  estimatedHours Float?
+  workflowStatus CardWorkflowStatus @default(ASSIGNED)
+  startedAt   DateTime?
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  approvedById String?
+  rejectionNote String?
+  archivedAt  DateTime?
+  /// Soft lock for concurrent edit (Conflict Resolution).
+  lockedByUserId String?
+  lockedAt       DateTime?
+  /// Creator — can edit / delete / reassign their own cards.
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  list        List           @relation(fields: [listId], references: [id], onDelete: Cascade)
+  createdBy   User?          @relation("CardCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy  User?          @relation("CardApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  comments    Comment[]
+  attachments Attachment[]
+  assignees   CardAssignee[]
+  checklistItems ChecklistItem[]
+  views       CardView[]
+  labels      CardLabel[]
+  evaluation  CardEvaluation?
+  /// Cards this card blocks (A blocks B → dependency from this card to blockedCard).
+  blocking    CardDependency[] @relation("Blocker")
+  blockedBy   CardDependency[] @relation("Blocked")
+  extensionRequests CardExtensionRequest[]
+  scheduleChanges   CardScheduleChange[]
+  delayIncident     CardDelayIncident?
+
+  @@index([listId, order])
+  @@index([createdById])
+  @@index([workflowStatus])
+  @@index([approvedById])
+  @@map("cards")
+}
+
+/// Manager evaluation after approving a task — feeds year-end employee reviews.
+model CardEvaluation {
+  id           String   @id @default(cuid())
+  cardId       String   @unique
+  workspaceId  String
+  employeeId   String
+  evaluatorId  String
+  /// 1–5 scores for year-end rollups
+  quality        Int
+  timeliness     Int
+  communication  Int
+  initiative     Int
+  collaboration  Int
+  overall        Int
+  strengths      String?
+  improvements   String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  card       Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employee   User @relation("EvaluationEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  evaluator  User @relation("EvaluationEvaluator", fields: [evaluatorId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, employeeId, createdAt])
+  @@index([evaluatorId, createdAt])
+  @@map("card_evaluations")
+}
+
+/// Employee asks for more hours/days before due date; manager accepts → schedule change audit.
+model CardExtensionRequest {
+  id                     String                 @id @default(cuid())
+  cardId                 String
+  workspaceId            String
+  requestedById          String
+  amount                 Float
+  unit                   ExtensionUnit
+  reason                 String
+  status                 ExtensionRequestStatus @default(PENDING)
+  reviewedById           String?
+  reviewedAt             DateTime?
+  reviewNote             String?
+  proposedDueDate        DateTime?
+  proposedEstimatedHours Float?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  card        Card               @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedBy User               @relation("ExtensionRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  reviewedBy  User?              @relation("ExtensionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  scheduleChange CardScheduleChange?
+
+  @@index([cardId, status])
+  @@index([workspaceId, status])
+  @@index([requestedById, createdAt])
+  @@map("card_extension_requests")
+}
+
+/// Audited schedule change (extension approved or manager adjust with reason) — not silent due edits.
+model CardScheduleChange {
+  id                   String               @id @default(cuid())
+  cardId               String
+  workspaceId          String
+  changedById          String
+  source               ScheduleChangeSource
+  prevDueDate          DateTime?
+  newDueDate           DateTime?
+  prevEstimatedHours   Float?
+  newEstimatedHours    Float?
+  addedDays            Float                @default(0)
+  addedHours           Float                @default(0)
+  reason               String
+  extensionRequestId   String?              @unique
+  createdAt            DateTime             @default(now())
+
+  card             Card                  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  changedBy        User                  @relation("ScheduleChanger", fields: [changedById], references: [id], onDelete: Cascade)
+  extensionRequest CardExtensionRequest? @relation(fields: [extensionRequestId], references: [id], onDelete: SetNull)
+
+  @@index([cardId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([changedById, createdAt])
+  @@map("card_schedule_changes")
+}
+
+/// Overdue task incident — Charge applies delayScore; Waive keeps stats without penalty.
+model CardDelayIncident {
+  id          String              @id @default(cuid())
+  cardId      String              @unique
+  workspaceId String
+  employeeId  String
+  status      DelayIncidentStatus @default(OPEN)
+  overdueAt   DateTime
+  daysLate    Float?
+  chargedAt   DateTime?
+  chargedById String?
+  waivedAt    DateTime?
+  waivedById  String?
+  waiveReason String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  card      Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  employee  User      @relation("DelayEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  chargedBy User?     @relation("DelayCharger", fields: [chargedById], references: [id], onDelete: SetNull)
+  waivedBy  User?     @relation("DelayWaiver", fields: [waivedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, employeeId, status])
+  @@index([workspaceId, status, overdueAt])
+  @@map("card_delay_incidents")
+}
+
+/// Workspace-scoped colored tags for cards (managers configure in Settings).
+model WorkspaceLabel {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  /// Hex color e.g. #EF4444
+  color       String   @default("#3B82F6")
+  createdById String?
+  /// Seeded defaults (Report, Consult, …) — cannot delete name lock optional
+  isSystem    Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User?       @relation("LabelCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  cards     CardLabel[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, sortOrder])
+  @@map("workspace_labels")
+}
+
+model CardLabel {
+  cardId  String
+  labelId String
+  addedAt DateTime @default(now())
+
+  card  Card           @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  label WorkspaceLabel @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([cardId, labelId])
+  @@index([labelId])
+  @@map("card_labels")
+}
+
+/// Who opened / viewed a card (read receipt). Visible only with card:views.
+model CardView {
+  cardId     String
+  userId     String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  seeCount    Int      @default(1)
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([cardId, userId])
+  @@index([cardId, lastSeenAt])
+  @@map("card_views")
+}
+
+model CardAssignee {
+  cardId String
+  userId String
+  assignedAt DateTime @default(now())
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([cardId, userId])
+  @@map("card_assignees")
+}
+
+/// Card A blocks Card B.
+model CardDependency {
+  id            String @id @default(cuid())
+  blockerCardId String
+  blockedCardId String
+  createdAt     DateTime @default(now())
+
+  blocker Card @relation("Blocker", fields: [blockerCardId], references: [id], onDelete: Cascade)
+  blocked Card @relation("Blocked", fields: [blockedCardId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerCardId, blockedCardId])
+  @@map("card_dependencies")
+}
+
+model ChecklistItem {
+  id        String  @id @default(cuid())
+  cardId    String
+  title     String
+  isDone    Boolean @default(false)
+  order     Float   @default(0)
+  /// Optional promotion: checklist item → standalone card.
+  linkedCardId String?
+  createdAt DateTime @default(now())
+
+  card Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId, order])
+  @@map("checklist_items")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  cardId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  card   Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+  @@map("comments")
+}
+
+model Attachment {
+  id           String    @id @default(cuid())
+  cardId       String
+  uploadedById String
+  fileName     String
+  fileUrl      String
+  mimeType     String?
+  sizeBytes    Int?
+  deletedAt    DateTime?
+  /// Soft-deleted files kept until this time (default +6 days) for SA recovery.
+  purgeAfter   DateTime?
+  createdAt    DateTime  @default(now())
+
+  card       Card @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+  @@index([deletedAt, purgeAfter])
+  @@map("attachments")
+}
+
+/// Workspace cloud media (chat images, uploads). Counted toward storage quota.
+enum MediaSource {
+  CHAT
+  CARD
+  UPLOAD
+}
+
+model MediaAsset {
+  id           String      @id @default(cuid())
+  workspaceId  String
+  uploadedById String
+  fileName     String
+  fileUrl      String
+  mimeType     String?
+  sizeBytes    Int         @default(0)
+  source       MediaSource @default(UPLOAD)
+  /// Optional board/card/room id for context.
+  sourceRef    String?
+  deletedAt    DateTime?
+  purgeAfter   DateTime?
+  createdAt    DateTime    @default(now())
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy User      @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([uploadedById])
+  @@index([deletedAt, purgeAfter])
+  @@map("media_assets")
+}
+
+// -----------------------------------------------------------------------------
+// Board Admin extras — custom fields, automations, webhooks
+// -----------------------------------------------------------------------------
+
+model BoardCustomField {
+  id      String @id @default(cuid())
+  boardId String
+  name    String
+  /// text | paragraph | checkbox | number | date | dropdown
+  fieldType String
+  options   Json? // dropdown options
+  sortOrder Float @default(0)
+  createdAt DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, sortOrder])
+  @@map("board_custom_fields")
+}
+
+model BoardAutomation {
+  id        String  @id @default(cuid())
+  boardId   String
+  name      String
+  /// Event-driven rule: { trigger, conditions, actions }
+  definition Json
+  isEnabled Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId])
+  @@map("board_automations")
+}
+
+model BoardWebhook {
+  id        String  @id @default(cuid())
+  boardId   String
+  url       String
+  secret    String?
+  isEnabled Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId])
+  @@map("board_webhooks")
+}
+
+// -----------------------------------------------------------------------------
+// Audit — ActivityLog (security + product trails)
+// -----------------------------------------------------------------------------
+
+/// Complete audit trail: who did what, when, from where.
+/// Super Admin security logs + workspace product events share this table;
+/// filter by `severity` / `action` / `workspaceId`.
+model ActivityLog {
+  id          String   @id @default(cuid())
+  /// Actor; null if system / webhook.
+  userId      String?
+  workspaceId String?
+  boardId     String?
+  /// e.g. board.create, role.update, workspace.suspend, auth.impersonate
+  action      String
+  /// Optional machine-readable payload (redact secrets / PII at write time).
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  /// info | warning | critical (impersonation = critical)
+  severity    String   @default("info")
+  createdAt   DateTime @default(now())
+
+  user      User?      @relation("ActorLogs", fields: [userId], references: [id], onDelete: SetNull)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  board     Board?     @relation(fields: [boardId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([action, createdAt])
+  @@index([severity, createdAt])
+  @@map("activity_logs")
+}
+
+/// Per-user inbox notifications (mentions, assignments, …).
+model Notification {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String
+  boardId     String?
+  cardId      String?
+  calendarEventId String?
+  actorId     String?
+  /// mention | assigned | calendar.invite | …
+  type        String
+  title       String
+  body        String?
+  /// Deep link override (e.g. /workspace/.../calendar?event=)
+  href        String?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  user      User      @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([workspaceId, createdAt])
+  @@map("notifications")
+}
+
+// -----------------------------------------------------------------------------
+// Feature flags (Super Admin canary / per-tenant toggles)
+// -----------------------------------------------------------------------------
+
+model FeatureFlag {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  description String?
+  /// 0–100 canary percentage of traffic.
+  canaryPercent Int   @default(0)
+  isEnabledGlobally Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspaceOverrides WorkspaceFeatureFlag[]
+
+  @@map("feature_flags")
+}
+
+model WorkspaceFeatureFlag {
+  workspaceId   String
+  featureFlagId String
+  isEnabled     Boolean @default(true)
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  featureFlag FeatureFlag @relation(fields: [featureFlagId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, featureFlagId])
+  @@map("workspace_feature_flags")
+}
+
+// -----------------------------------------------------------------------------
+// Super Admin — IP blacklist (WAF layer companion)
+// -----------------------------------------------------------------------------
+
+model IpBlacklist {
+  id        String   @id @default(cuid())
+  cidr      String   @unique
+  reason    String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  @@map("ip_blacklist")
+}
+
+// -----------------------------------------------------------------------------
+// Workspace Chat & internal Mail
+// -----------------------------------------------------------------------------
+
+enum ChatRoomType {
+  DIRECT
+  CHANNEL
+}
+
+model ChatRoom {
+  id          String       @id @default(cuid())
+  workspaceId String
+  type        ChatRoomType @default(CHANNEL)
+  name        String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   ChatRoomMember[]
+  messages  ChatMessage[]
+
+  @@index([workspaceId])
+  @@map("chat_rooms")
+}
+
+model ChatRoomMember {
+  roomId     String
+  userId     String
+  joinedAt   DateTime  @default(now())
+  lastReadAt DateTime?
+
+  room ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, userId])
+  @@index([userId])
+  @@map("chat_room_members")
+}
+
+model ChatMessage {
+  id         String    @id @default(cuid())
+  roomId     String
+  authorId   String
+  body       String
+  replyToId  String?
+  editedAt   DateTime?
+  deletedAt  DateTime?
+  /// Soft-deleted messages kept until this time (default +6 days) for SA recovery.
+  purgeAfter DateTime?
+  /// Mentions of projects/files/people beyond user rows: [{kind,id,label,url?}]
+  entityMentions Json?
+  createdAt  DateTime  @default(now())
+
+  room        ChatRoom             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  author      User                 @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  replyTo     ChatMessage?         @relation("ChatReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies     ChatMessage[]        @relation("ChatReply")
+  reactions   ChatReaction[]
+  attachments ChatAttachment[]
+  mentions    ChatMessageMention[]
+  savedBy     SavedChatMessage[]
+
+  @@index([roomId, createdAt])
+  @@index([replyToId])
+  @@index([deletedAt, purgeAfter])
+  @@map("chat_messages")
+}
+
+model ChatReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@map("chat_reactions")
+}
+
+model ChatAttachment {
+  id         String    @id @default(cuid())
+  messageId  String
+  fileName   String
+  fileUrl    String
+  mimeType   String?
+  sizeBytes  Int       @default(0)
+  deletedAt  DateTime?
+  purgeAfter DateTime?
+  createdAt  DateTime  @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([deletedAt, purgeAfter])
+  @@map("chat_attachments")
+}
+
+model ChatMessageMention {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("chat_message_mentions")
+}
+
+model SavedChatMessage {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  messageId   String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@index([workspaceId, userId, createdAt])
+  @@map("saved_chat_messages")
+}
+
+model MailMessage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  fromUserId  String
+  toUserId    String
+  subject     String
+  body        String
+  readAt      DateTime?
+  archivedAt  DateTime?
+  starred     Boolean   @default(false)
+  /// alerts | inspections | trainings | general
+  category    String    @default("general")
+  /// critical | high | medium | low
+  priority    String    @default("medium")
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fromUser  User      @relation("MailFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser    User      @relation("MailTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, toUserId, createdAt])
+  @@index([workspaceId, fromUserId, createdAt])
+  @@map("mail_messages")
+}
+
+enum MailboxScope {
+  PERSONAL
+  ORG
+}
+
+/// Connected IMAP/SMTP mailbox (personal or org) for inbound sync into Nexus Email.
+model ConnectedMailbox {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  /// Owner of personal mailbox; null for shared ORG mailbox managed by admins
+  userId        String?
+  scope         MailboxScope @default(PERSONAL)
+  label         String?
+  emailAddress  String
+  imapHost      String
+  imapPort      Int          @default(993)
+  imapSecure    Boolean      @default(true)
+  smtpHost      String?
+  smtpPort      Int          @default(587)
+  smtpSecure    Boolean      @default(true)
+  username      String
+  /// AES-GCM ciphertext (base64) — see lib/mailbox-crypto.ts
+  passwordEnc   String
+  lastSyncAt    DateTime?
+  lastError     String?
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ExternalMailMessage[]
+
+  @@index([workspaceId, scope])
+  @@index([workspaceId, userId])
+  @@unique([workspaceId, emailAddress])
+  @@map("connected_mailboxes")
+}
+
+/// Google Sheets OAuth connection (per user, scoped to a workspace).
+model GoogleSheetsConnection {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  userId          String
+  /// Google account email
+  googleEmail     String
+  googleAccountId String?
+  /// AES-GCM ciphertext — see lib/mailbox-crypto.ts
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  tokenExpiresAt  DateTime?
+  scopes          String    @db.Text
+  lastExportAt    DateTime?
+  lastImportAt    DateTime?
+  lastError       String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncLinks GoogleSheetSyncLink[]
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@map("google_sheets_connections")
+}
+
+/// Optional two-way sync binding: a ENTERHUB board ↔ a Google Spreadsheet.
+model GoogleSheetSyncLink {
+  id             String    @id @default(cuid())
+  connectionId   String
+  workspaceId    String
+  boardId        String
+  spreadsheetId  String
+  spreadsheetUrl String?
+  sheetName      String    @default("Tasks")
+  /// EXPORT_ONLY | IMPORT_ONLY | TWO_WAY
+  syncMode       String    @default("EXPORT_ONLY")
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  connection GoogleSheetsConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  board      Board                  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, spreadsheetId])
+  @@index([workspaceId])
+  @@index([connectionId])
+  @@map("google_sheet_sync_links")
+}
+
+model ExternalMailMessage {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  mailboxId     String
+  /// User who should see this mail (mailbox owner or all org members via sync target)
+  ownerUserId   String
+  externalUid   String
+  folder        String    @default("inbox")
+  fromName      String?
+  fromEmail     String
+  toEmails      String?
+  subject       String
+  bodyText      String    @db.Text
+  starred       Boolean   @default(false)
+  readAt        DateTime?
+  category      String    @default("general")
+  priority      String    @default("medium")
+  receivedAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  mailbox   ConnectedMailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  owner     User            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([mailboxId, externalUid])
+  @@index([workspaceId, ownerUserId, folder, receivedAt])
+  @@map("external_mail_messages")
+}
+
+enum LetterType {
+  EXCUSE
+  ADMIN
+  GENERAL
+}
+
+enum LetterStatus {
+  OPEN
+  REPLIED
+  CLOSED
+}
+
+/// Formal org letters (excuse / admin / general) — shown inside Chat Letters tab.
+model WorkspaceLetter {
+  id          String       @id @default(cuid())
+  workspaceId String
+  type        LetterType   @default(GENERAL)
+  status      LetterStatus @default(OPEN)
+  fromUserId  String
+  toUserId    String
+  subject     String
+  body        String
+  parentId    String?
+  readAt      DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  fromUser  User              @relation("LetterFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser    User              @relation("LetterTo", fields: [toUserId], references: [id], onDelete: Cascade)
+  parent    WorkspaceLetter?  @relation("LetterThread", fields: [parentId], references: [id], onDelete: SetNull)
+  replies   WorkspaceLetter[] @relation("LetterThread")
+
+  @@index([workspaceId, toUserId, createdAt])
+  @@index([workspaceId, fromUserId, createdAt])
+  @@index([parentId])
+  @@map("workspace_letters")
+}
+
+// -----------------------------------------------------------------------------
+// Workspace Calendar — events / meetings / ceremonies
+// -----------------------------------------------------------------------------
+
+enum CalendarEventKind {
+  MEETING
+  CEREMONY
+  REMINDER
+  OTHER
+}
+
+enum MeetingMode {
+  IN_APP
+  IN_PERSON
+  LINK
+}
+
+enum CalendarAttendeeStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+model CalendarEvent {
+  id           String            @id @default(cuid())
+  workspaceId  String
+  createdById  String
+  title        String
+  description  String?
+  kind         CalendarEventKind @default(MEETING)
+  /// Meeting delivery: in-app room, physical location, or external link
+  meetingMode  MeetingMode       @default(IN_APP)
+  meetingUrl   String?
+  location     String?
+  startsAt     DateTime
+  endsAt       DateTime
+  allDay       Boolean           @default(false)
+  color        String            @default("#8B5CF6")
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  workspace Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User                    @relation("CalendarEventCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  attendees CalendarEventAttendee[]
+
+  @@index([workspaceId, startsAt])
+  @@index([createdById])
+  @@map("calendar_events")
+}
+
+model CalendarEventAttendee {
+  id        String                 @id @default(cuid())
+  eventId   String
+  userId    String
+  status    CalendarAttendeeStatus @default(PENDING)
+  notifiedAt DateTime?
+  createdAt DateTime               @default(now())
+
+  event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId])
+  @@map("calendar_event_attendees")
+}
+
+// -----------------------------------------------------------------------------
+// Platform settings, SMS OTP, payments (C2C / Zarinpal), plan catalog overrides
+// -----------------------------------------------------------------------------
+
+model PlatformSettings {
+  id                   String  @id @default("default")
+  smsOtpEnabled        Boolean @default(true)
+  emailVerifyEnabled   Boolean @default(true)
+  googleAuthEnabled    Boolean @default(true)
+  /// Override SMSIR_OTP_TEMPLATE_ID when set.
+  smsirTemplateId      Int?
+  zarinpalMerchantId   String?
+  zarinpalSandbox      Boolean @default(true)
+  /// Editable plan catalog JSON (optional override of plans-catalog.ts).
+  plansCatalogJson     Json?
+  notes                String?
+  updatedAt            DateTime @updatedAt
+  createdAt            DateTime @default(now())
+
+  @@map("platform_settings")
+}
+
+model PhoneOtp {
+  id         String    @id @default(cuid())
+  phone      String
+  userId     String?
+  codeHash   String
+  purpose    String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([phone, purpose, createdAt])
+  @@map("phone_otps")
+}
+
+enum PaymentMethodKind {
+  C2C
+  ZARINPAL
+}
+
+model PaymentMethod {
+  id        String            @id @default(cuid())
+  kind      PaymentMethodKind @unique
+  enabled   Boolean           @default(false)
+  config    Json?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@map("payment_methods")
+}
+
+model BankCard {
+  id          String   @id @default(cuid())
+  holderName  String
+  bankName    String
+  /// Full number stored for SA; UI shows masked + last4.
+  cardNumber  String
+  last4       String
+  iban        String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  receipts C2CReceipt[]
+
+  @@index([isActive, sortOrder])
+  @@map("bank_cards")
+}
+
+enum PlanPurchaseStatus {
+  PENDING_RECEIPT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model PlanPurchaseRequest {
+  id              String             @id @default(cuid())
+  workspaceId     String
+  userId          String
+  planTier        PlanTier
+  billingCycle    String
+  amount          Int
+  currency        String             @default("IRR")
+  seats           Int                @default(5)
+  cloudPackMb     Int                @default(0)
+  /// Requested paid period length in days (null = catalog default).
+  planDays        Int?
+  status          PlanPurchaseStatus @default(PENDING_RECEIPT)
+  rejectionReason String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?       @relation("C2CReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  receipt    C2CReceipt?
+
+  @@index([status, createdAt])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("plan_purchase_requests")
+}
+
+model C2CReceipt {
+  id             String    @id @default(cuid())
+  requestId      String    @unique
+  bankCardId     String?
+  amountClaimed  Int
+  paidAtClaimed  DateTime?
+  receiptImageUrl String
+  note           String?
+  createdAt      DateTime  @default(now())
+
+  request  PlanPurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  bankCard BankCard?           @relation(fields: [bankCardId], references: [id], onDelete: SetNull)
+
+  @@index([bankCardId])
+  @@map("c2c_receipts")
+}

@@ -1,0 +1,24 @@
+# Local/IDE state (not part of the product)
+.cursor/
+.vscode/
+.continue/
+**/.claude/
+
+# Node build output
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/dist/
+
+# Env files (keep .env.example)
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local probes / scratch
+**/tmp-*.txt
+
+# OS files
+.DS_Store
+
