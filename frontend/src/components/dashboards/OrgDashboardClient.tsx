@@ -14,6 +14,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import SafeStatsRow from '@/components/SafeDashboard/SafeStatsRow';
 import { WidgetFrame } from '@/components/dashboards/WidgetFrame';
 import { textPrimary,
@@ -56,6 +57,7 @@ type DashboardData = {
 
 export function OrgDashboardClient({ workspaceId }: { workspaceId: string }) {
   const { theme, primaryColor } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export function OrgDashboardClient({ workspaceId }: { workspaceId: string }) {
         isDark={isDark}
         stats={[
           {
-            label: 'Seats',
+            label: t('usageStrip.seats'),
             value: data.seats.used,
             unit: `/ ${data.seats.limit}`,
             sub: `${data.pendingInvites} pending invites`,

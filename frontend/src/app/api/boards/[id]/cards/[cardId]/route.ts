@@ -9,8 +9,9 @@ import {
   filterCustomFieldsForUser,
   resolveCardCapabilities,
 } from "@/lib/card-permissions";
-import { emitToBoardRoom } from "@/lib/socket-emit";
+import { emitToBoardRoom, emitToWorkspaceRoom } from "@/lib/socket-emit";
 import { parseCardDateInput } from "@/lib/card-dates";
+import { publishBoardLive } from "@/lib/boards-live-bus";
 
 type Ctx = { params: Promise<{ id: string; cardId: string }> };
 
@@ -30,6 +31,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     where: { id: cardId, list: { boardId }, archivedAt: null },
     include: {
       list: { select: { id: true, title: true } },
+      supervisor: { select: { id: true, name: true, email: true } },
       assignees: {
         include: { user: { select: { id: true, name: true, email: true } } },
       },
@@ -106,7 +108,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   const caps = await resolveCardCapabilities(
     session.user.id,
     board,
-    { id: card.id, createdById: card.createdById },
+    { id: card.id, createdById: card.createdById, supervisorId: card.supervisorId },
     access,
   );
   if (!caps.canView) {
@@ -209,6 +211,7 @@ const patchSchema = z.object({
   dueDate: z.string().optional().nullable(),
   startDate: z.string().optional().nullable(),
   estimatedHours: z.number().positive().max(1000).optional().nullable(),
+  supervisorId: z.string().min(1).optional().nullable(),
   priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   labelIds: z.array(z.string().min(1)).max(20).optional(),
 });
@@ -230,7 +233,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   const existing = await prisma.card.findFirst({
     where: { id: cardId, list: { boardId } },
-    select: { id: true, createdById: true },
+    select: { id: true, createdById: true, supervisorId: true, title: true },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -270,6 +273,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (parsed.data.estimatedHours !== undefined && !caps.canEditDueDate) {
     return NextResponse.json(
       { error: "Forbidden: only manager/creator can set estimated hours" },
+      { status: 403 },
+    );
+  }
+  if (parsed.data.supervisorId !== undefined && !caps.canAssign) {
+    return NextResponse.json(
+      { error: "Forbidden: cannot change the supervisor on this card" },
       { status: 403 },
     );
   }
@@ -317,6 +326,27 @@ export async function PATCH(req: Request, ctx: Ctx) {
     startDate = d;
   }
 
+  let supervisorId: string | null | undefined = undefined;
+  if (parsed.data.supervisorId !== undefined) {
+    supervisorId = parsed.data.supervisorId || null;
+    if (supervisorId) {
+      const supervisor = await prisma.workspaceMember.findFirst({
+        where: {
+          workspaceId: board.workspaceId,
+          userId: supervisorId,
+          status: "ACTIVE",
+        },
+        select: { userId: true },
+      });
+      if (!supervisor) {
+        return NextResponse.json(
+          { error: "Supervisor is not an active workspace member" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   const card = await prisma.card.update({
     where: { id: cardId },
     data: {
@@ -332,6 +362,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       ...(parsed.data.estimatedHours !== undefined
         ? { estimatedHours: parsed.data.estimatedHours }
         : {}),
+      ...(supervisorId !== undefined ? { supervisorId } : {}),
       ...(parsed.data.priority ? { priority: parsed.data.priority } : {}),
     },
   });
@@ -354,10 +385,36 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
   }
 
+  if (
+    supervisorId &&
+    supervisorId !== existing.supervisorId
+  ) {
+    const { notifyUsers } = await import("@/lib/card-permissions");
+    await notifyUsers({
+      userIds: [supervisorId],
+      workspaceId: board.workspaceId,
+      boardId,
+      cardId,
+      actorId: session.user.id,
+      type: "task.supervisor",
+      title: `Supervisor on “${parsed.data.title || existing.title}”`,
+      body: "You were set as supervisor for this task",
+    });
+  }
+
   emitToBoardRoom(boardId, "card-updated", {
     type: "card.updated",
     boardId,
     cards: [{ id: card.id, listId: card.listId, order: card.order }],
+  });
+
+  publishBoardLive({
+    type: "card.changed",
+    workspaceId: board.workspaceId,
+    boardId,
+    cardId: card.id,
+    departmentId: board.departmentId,
+    reason: "updated",
   });
 
   return NextResponse.json({ data: card });
@@ -408,6 +465,15 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     cardId,
     listId: existing.listId,
   });
+  const live = {
+    type: "card.deleted" as const,
+    workspaceId: board.workspaceId,
+    boardId,
+    cardId,
+    departmentId: board.departmentId,
+  };
+  publishBoardLive(live);
+  emitToWorkspaceRoom(board.workspaceId, "board-updated", live);
 
   return NextResponse.json({ ok: true });
 }

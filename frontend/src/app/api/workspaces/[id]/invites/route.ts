@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import bcrypt from "bcryptjs";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isWorkspaceMember } from "@/lib/rbac";
@@ -15,14 +14,19 @@ import {
   shouldAutoApproveAfterAccept,
 } from "@/lib/department-invites";
 import { notifyUsers } from "@/lib/card-permissions";
+import { findOrCreateInvitee, parseInviteContact } from "@/lib/invite-contact";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 const createSchema = z.object({
-  email: z.string().email(),
+  /** Email or Iranian mobile (09…). Kept as `email` for backward-compatible clients. */
+  email: z.string().min(3).max(120),
   name: z.string().max(120).optional(),
   roleId: z.string().min(1),
+  /** Primary department (backward compatible). */
   departmentId: z.string().min(1).optional().nullable(),
+  /** Extra / multi departments — early-stage teammates may need Finance + IT, etc. */
+  departmentIds: z.array(z.string().min(1)).max(20).optional().default([]),
   departmentRole: z.enum(["MANAGER", "SUPERVISOR", "MEMBER"]).default("MEMBER"),
   note: z.string().max(500).optional().nullable(),
 });
@@ -38,7 +42,6 @@ export async function GET(req: Request, ctx: Ctx) {
   }
   const { id: workspaceId } = await ctx.params;
   if (!(await isWorkspaceMember(session.user.id, workspaceId))) {
-    // Allow invitees who are not yet ACTIVE to see their pending accepts
     const pending = await prisma.workspaceInvite.findMany({
       where: {
         workspaceId,
@@ -97,7 +100,7 @@ export async function GET(req: Request, ctx: Ctx) {
       role: { select: { id: true, name: true } },
       invitedBy: { select: { id: true, name: true, email: true } },
       approvedBy: { select: { id: true, name: true, email: true } },
-      invitee: { select: { id: true, name: true, email: true } },
+      invitee: { select: { id: true, name: true, email: true, phone: true } },
     },
     orderBy: { createdAt: "desc" },
     take: 200,
@@ -114,7 +117,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
 /**
  * POST — create department/workspace invite.
- * Flow: PENDING_ACCEPT → (employee accept) → PENDING_APPROVAL or auto ACTIVE.
+ * Invitee may be identified by email or Iranian phone number.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const session = await auth();
@@ -131,10 +134,36 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Validation failed" }, { status: 400 });
   }
 
-  const departmentId = parsed.data.departmentId || null;
-  if (!(await canInviteToDepartment(session.user.id, workspaceId, departmentId))) {
+  const contact = parseInviteContact(parsed.data.email);
+  if (!contact) {
     return NextResponse.json(
-      { error: "Forbidden: you cannot invite into this department" },
+      { error: "Enter a valid email or Iranian phone number (09…)" },
+      { status: 400 },
+    );
+  }
+
+  const deptIdSet = new Set<string>();
+  if (parsed.data.departmentId) deptIdSet.add(parsed.data.departmentId);
+  for (const id of parsed.data.departmentIds || []) {
+    if (id) deptIdSet.add(id);
+  }
+  const allDepartmentIds = Array.from(deptIdSet);
+  const departmentId = allDepartmentIds[0] || null;
+
+  for (const deptId of allDepartmentIds) {
+    if (!(await canInviteToDepartment(session.user.id, workspaceId, deptId))) {
+      return NextResponse.json(
+        { error: "Forbidden: you cannot invite into one of the selected departments" },
+        { status: 403 },
+      );
+    }
+  }
+  if (
+    !allDepartmentIds.length &&
+    !(await canInviteToDepartment(session.user.id, workspaceId, null))
+  ) {
+    return NextResponse.json(
+      { error: "Forbidden: you cannot invite into this workspace" },
       { status: 403 },
     );
   }
@@ -172,30 +201,25 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  if (departmentId) {
-    const dept = await prisma.department.findFirst({
-      where: { id: departmentId, workspaceId },
+  if (allDepartmentIds.length) {
+    const depts = await prisma.department.findMany({
+      where: { id: { in: allDepartmentIds }, workspaceId },
+      select: { id: true },
     });
-    if (!dept) {
-      return NextResponse.json({ error: "Department not found" }, { status: 404 });
+    if (depts.length !== allDepartmentIds.length) {
+      return NextResponse.json(
+        { error: "One or more departments were not found" },
+        { status: 404 },
+      );
     }
   }
 
-  const email = parsed.data.email.toLowerCase();
-  let user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    const tempHash = await bcrypt.hash(
-      `invite-${Date.now()}-${Math.random()}`,
-      10,
-    );
-    user = await prisma.user.create({
-      data: {
-        email,
-        name: parsed.data.name ?? email.split("@")[0],
-        passwordHash: tempHash,
-      },
-    });
-  }
+  const resolved = await findOrCreateInvitee({
+    contact,
+    name: parsed.data.name,
+  });
+  const user = resolved.user;
+  const email = resolved.contact.email.toLowerCase();
 
   const existingMember = await prisma.workspaceMember.findUnique({
     where: { workspaceId_userId: { workspaceId, userId: user.id } },
@@ -210,13 +234,13 @@ export async function POST(req: Request, ctx: Ctx) {
   const openInvite = await prisma.workspaceInvite.findFirst({
     where: {
       workspaceId,
-      email,
       status: { in: ["PENDING_ACCEPT", "PENDING_APPROVAL"] },
+      OR: [{ email }, { inviteeUserId: user.id }],
     },
   });
   if (openInvite) {
     return NextResponse.json(
-      { error: "An open invite already exists for this email" },
+      { error: "An open invite already exists for this person" },
       { status: 409 },
     );
   }
@@ -228,6 +252,7 @@ export async function POST(req: Request, ctx: Ctx) {
     data: {
       workspaceId,
       departmentId,
+      departmentIds: allDepartmentIds.length ? allDepartmentIds : undefined,
       email,
       inviteeUserId: user.id,
       invitedById: session.user.id,
@@ -240,10 +265,10 @@ export async function POST(req: Request, ctx: Ctx) {
     include: {
       department: { select: { id: true, name: true } },
       role: { select: { id: true, name: true } },
+      invitee: { select: { id: true, name: true, email: true, phone: true } },
     },
   });
 
-  // Keep legacy INVITED membership for visibility in members list
   if (!existingMember) {
     await prisma.workspaceMember.create({
       data: {
@@ -266,21 +291,50 @@ export async function POST(req: Request, ctx: Ctx) {
       : "Accept the workspace invitation",
   });
 
+  // Always email when we have a real address (invite-by-email, or phone user who already set email).
+  const inviteEmail =
+    (contact.kind === "email" && email) ||
+    (user.email && !user.email.endsWith("@users.enterhub.local")
+      ? user.email
+      : null);
+  if (inviteEmail) {
+    try {
+      const { emailInviteLink } = await import("@/lib/notify-email");
+      await emailInviteLink({
+        toEmail: inviteEmail,
+        name: user.name,
+        inviteToken: invite.token,
+        workspaceLabel: invite.department?.name || "workspace",
+      });
+    } catch (e) {
+      console.error("[invite] email send failed", e);
+    }
+  }
+
   await AuditLogger.fromRequest(req, {
     userId: session.user.id,
     workspaceId,
     action: "invite.create",
     metadata: {
       email,
+      phone: contact.kind === "phone" ? contact.phone : null,
       departmentId,
+      departmentIds: allDepartmentIds,
       departmentRole: parsed.data.departmentRole,
       inviteId: invite.id,
     },
   });
 
-  return NextResponse.json({ data: invite }, { status: 201 });
+  return NextResponse.json(
+    {
+      data: {
+        ...invite,
+        joinPath: `/join/${invite.token}`,
+      },
+    },
+    { status: 201 },
+  );
 }
 
-// re-export helpers used by accept route siblings (keep module graph simple)
 void activateInviteMembership;
 void shouldAutoApproveAfterAccept;

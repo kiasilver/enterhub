@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import {
   SettingsGlassCard,
   SettingsSectionTitle,
@@ -26,6 +27,7 @@ export default function OwnershipSettingsPage() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -64,7 +66,7 @@ export default function OwnershipSettingsPage() {
   async function transfer(e: React.FormEvent) {
     e.preventDefault();
     if (!newOwnerUserId) return;
-    if (!confirm('Transfer ownership? You will become Org Admin.')) return;
+    if (!confirm(t('settingsUi.transferConfirm'))) return;
     setBusy(true);
     setError(null);
     setOk(null);
@@ -79,7 +81,7 @@ export default function OwnershipSettingsPage() {
       setError(json.error || 'Transfer failed');
       return;
     }
-    setOk('Ownership transferred');
+    setOk(t('settingsUi.ownershipTransferred'));
     await load();
   }
 
@@ -92,7 +94,7 @@ export default function OwnershipSettingsPage() {
   if (forbidden) {
     return (
       <p className="text-sm" style={{ color: textMuted(isDark) }}>
-        Only the current owner can transfer ownership.
+        {t('settingsUi.ownershipForbidden')}
       </p>
     );
   }
@@ -105,15 +107,15 @@ export default function OwnershipSettingsPage() {
     <form onSubmit={(e) => void transfer(e)} className="w-full">
       <SettingsGlassCard accent="#ef4444">
         <SettingsSectionTitle
-          title="Transfer ownership"
-          subtitle="The new owner gets full control. You keep access as Org Admin."
-          badge="Critical"
+          title={t('settingsUi.ownershipTitle')}
+          subtitle={t('settingsUi.ownershipSubtitle')}
+          badge={t('settings.ownership')}
           badgeColor="#ef4444"
         />
 
         <label className="block space-y-1.5">
           <span className="text-xs font-medium" style={{ color: textSecondary(isDark) }}>
-            New owner
+            {t('settingsUi.newOwner')}
           </span>
           <select
             value={newOwnerUserId}
@@ -124,7 +126,7 @@ export default function OwnershipSettingsPage() {
           >
             {candidates.length === 0 && (
               <option value="" style={{ color: '#000' }}>
-                Invite a member first
+                {t('settingsUi.inviteMemberFirst')}
               </option>
             )}
             {candidates.map((m) => (
@@ -144,7 +146,7 @@ export default function OwnershipSettingsPage() {
           className="mt-5 px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #ef4444, #f97316)' }}
         >
-          {busy ? 'Transferring…' : 'Transfer ownership'}
+          {busy ? t('settingsUi.transferring') : t('settingsUi.transferBtn')}
         </button>
       </SettingsGlassCard>
     </form>

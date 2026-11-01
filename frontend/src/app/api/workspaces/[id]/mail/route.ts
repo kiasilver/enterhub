@@ -225,6 +225,22 @@ export async function POST(req: Request, ctx: Ctx) {
     fromUserId: mail.fromUserId,
     subject: mail.subject,
   });
+
+  try {
+    const { notifyUsers } = await import('@/lib/card-permissions');
+    await notifyUsers({
+      userIds: [mail.toUserId],
+      workspaceId,
+      actorId: session.user.id,
+      type: 'mail.received',
+      title: mail.subject,
+      body: 'New message in your inbox',
+      href: `/workspace/${workspaceId}/email`,
+    });
+  } catch (e) {
+    console.error('[mail] notify failed', e);
+  }
+
   publishBadgeRefresh({ workspaceId, userId: mail.toUserId });
 
   return NextResponse.json({ data: { id: mail.id } }, { status: 201 });

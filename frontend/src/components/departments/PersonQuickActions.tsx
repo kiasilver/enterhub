@@ -8,6 +8,7 @@ import { textPrimary,
   borderSubtle,
   surfaceItem, panelFill } from '@/components/SafeDashboard/theme';
 import type { DeptPerson } from '@/components/departments/department-types';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 
 export function PersonAvatar({
   person,
@@ -70,6 +71,7 @@ export function PersonQuickActions({
   className = '',
 }: Props) {
   const router = useRouter();
+  const { t } = useLang();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,12 +103,12 @@ export function PersonQuickActions({
         body: JSON.stringify({ type: 'DIRECT', memberIds: [person.id] }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Could not open chat');
+      if (!res.ok) throw new Error(json.error || t('common.failed'));
       const roomId = json.data?.id as string;
       setOpen(false);
       router.push(`/workspace/${workspaceId}/chat?room=${roomId}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Chat failed');
+      setError(e instanceof Error ? e.message : t('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -127,10 +129,10 @@ export function PersonQuickActions({
           setOpen((v) => !v);
           setError(null);
         }}
-        className="inline-flex items-center gap-1.5 rounded-lg transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        className="inline-flex items-center gap-2 rounded-lg transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`${person.name || person.email} actions`}
+        aria-label={`${person.name || person.email} — ${t('common.actions')}`}
       >
         {children}
       </button>
@@ -138,7 +140,7 @@ export function PersonQuickActions({
       {open && (
         <div
           role="menu"
-          className="absolute z-40 left-0 top-full mt-1 min-w-[190px] rounded-xl p-1 shadow-lg"
+          className="absolute z-40 start-0 top-full mt-1 min-w-[190px] rounded-xl p-1 shadow-lg"
           style={{
             background: panelFill(isDark),
             border: `1px solid ${borderSubtle(isDark)}`,
@@ -150,7 +152,7 @@ export function PersonQuickActions({
             role="menuitem"
             disabled={busy}
             onClick={() => void openChat()}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-left disabled:opacity-50"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-start disabled:opacity-50"
             style={{ color: textPrimary(isDark) }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = surfaceItem(isDark);
@@ -160,13 +162,13 @@ export function PersonQuickActions({
             }}
           >
             <MdChatBubbleOutline size={16} />
-            {busy ? 'Opening…' : 'Open chat'}
+            {busy ? t('departmentsPage.openingChat') : t('departmentsPage.openChat')}
           </button>
           <button
             type="button"
             role="menuitem"
             onClick={openAnalytics}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-left"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-start"
             style={{ color: textPrimary(isDark) }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = surfaceItem(isDark);
@@ -176,7 +178,7 @@ export function PersonQuickActions({
             }}
           >
             <MdBarChart size={16} />
-            People analytics
+            {t('departmentsPage.peopleAnalytics')}
           </button>
           {error && (
             <p className="px-3 py-1.5 text-[10px] text-red-500">{error}</p>

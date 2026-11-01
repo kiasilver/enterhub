@@ -26,9 +26,18 @@ import {
   borderSubtle,
   surfaceItem,
 } from '@/components/SafeDashboard/theme';
-import { POSITION_TEMPLATES, DEPARTMENTS } from '@/lib/enterprise-positions';
+import { POSITION_TEMPLATES } from '@/lib/enterprise-positions';
 import { PERMISSION_CATALOG, SYSTEM_ROLE_META } from '@/lib/permissions-catalog';
-import { localizeRoleName } from '@/lib/role-i18n';
+import {
+  localizeDeptLabel,
+  localizePermDesc,
+  localizePermGroup,
+  localizePermLabel,
+  localizePositionDesc,
+  localizePositionName,
+  localizeRoleDescription,
+  localizeRoleName,
+} from '@/lib/role-i18n';
 
 type RoleRow = {
   id: string;
@@ -67,11 +76,6 @@ const PREFIX_ORDER = [
 const PERM_META = Object.fromEntries(
   PERMISSION_CATALOG.map((p) => [p.actionName, p])
 ) as Record<string, (typeof PERMISSION_CATALOG)[number]>;
-
-const DEPT_LABEL: Record<string, string> = {
-  leadership: 'Leadership',
-  ...Object.fromEntries(DEPARTMENTS.map((d) => [d.key, d.label])),
-};
 
 function prefixOf(action: string) {
   const p = action.split(':')[0];
@@ -192,7 +196,7 @@ export default function RolesPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || t('rolesPage.renameFailed'));
       setRenamingId(null);
-      setOk(t('rolesPage.renamedTo', { name: json.data.name }));
+      setOk(t('rolesPage.renamedTo', { name: localizeRoleName(json.data.name, t) }));
       if (selectedId === roleId) setEditName(json.data.name);
       await load();
     } catch (e) {
@@ -243,14 +247,20 @@ export default function RolesPage() {
   const filteredTemplates = useMemo(() => {
     const q = positionQuery.trim().toLowerCase();
     if (!q) return POSITION_TEMPLATES;
-    return POSITION_TEMPLATES.filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q) ||
-        t.department.toLowerCase().includes(q) ||
-        (DEPT_LABEL[t.department] || '').toLowerCase().includes(q)
-    );
-  }, [positionQuery]);
+    return POSITION_TEMPLATES.filter((tmpl) => {
+      const name = localizePositionName(tmpl.key, tmpl.name, t);
+      const desc = localizePositionDesc(tmpl.key, tmpl.description, t);
+      const dept = localizeDeptLabel(tmpl.department, t);
+      return (
+        tmpl.name.toLowerCase().includes(q) ||
+        tmpl.description.toLowerCase().includes(q) ||
+        tmpl.department.toLowerCase().includes(q) ||
+        name.toLowerCase().includes(q) ||
+        desc.toLowerCase().includes(q) ||
+        dept.toLowerCase().includes(q)
+      );
+    });
+  }, [positionQuery, t]);
 
   function pickTemplate(key: string | null) {
     setSelectedTemplateKey(key);
@@ -262,8 +272,8 @@ export default function RolesPage() {
     }
     const tmpl = POSITION_TEMPLATES.find((p) => p.key === key);
     if (!tmpl) return;
-    setCreateName(tmpl.name);
-    setCreateDesc(tmpl.description);
+    setCreateName(localizePositionName(tmpl.key, tmpl.name, t));
+    setCreateDesc(localizePositionDesc(tmpl.key, tmpl.description, t));
     setCreatePerms([...tmpl.permissions]);
   }
 
@@ -348,7 +358,7 @@ export default function RolesPage() {
       if (!res.ok) throw new Error(json.error || t('rolesPage.createFailed'));
       setCreateOpen(false);
       setSelectedId(json.data.id);
-      setOk(t('rolesPage.created', { name: json.data.name }));
+      setOk(t('rolesPage.created', { name: localizeRoleName(json.data.name, t) }));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('rolesPage.createFailed'));
@@ -359,7 +369,7 @@ export default function RolesPage() {
 
   async function deleteRole() {
     if (!selected || isNameLocked(selected)) return;
-    const label = selected.name;
+    const label = localizeRoleName(selected.name, t);
     if (selected.memberCount > 0) {
       setError(t('rolesPage.reassignBeforeDelete', { n: selected.memberCount, name: label }));
       return;
@@ -411,10 +421,10 @@ export default function RolesPage() {
         {groups.map(([group, actions]) => (
           <div key={group}>
             <p
-              className="text-xs uppercase tracking-widest mb-2"
+              className="text-xs font-semibold tracking-wide mb-2"
               style={{ color: textMuted(isDark) }}
             >
-              {group}:
+              {localizePermGroup(group, t)}
             </p>
             <div className="grid sm:grid-cols-2 gap-2">
               {actions.map((action) => {
@@ -432,11 +442,11 @@ export default function RolesPage() {
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span
-                        className="font-mono text-xs truncate"
+                        className="text-sm truncate"
                         style={{ color: textPrimary(isDark) }}
                         title={action}
                       >
-                        {action}
+                        {localizePermLabel(action, t)}
                       </span>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -444,14 +454,16 @@ export default function RolesPage() {
                             type="button"
                             className="inline-flex shrink-0 p-0.5 rounded-full opacity-70 hover:opacity-100"
                             style={{ color: textMuted(isDark) }}
-                            aria-label={t('rolesPage.aboutPermission', { action })}
+                            aria-label={t('rolesPage.aboutPermission', {
+                              action: localizePermLabel(action, t),
+                            })}
                             onClick={(e) => e.preventDefault()}
                           >
                             <MdInfoOutline size={15} />
                           </button>
                         </TooltipTrigger>
                         <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
-                          {meta?.description || t('rolesPage.noDescription')}
+                          {localizePermDesc(action, meta?.description, t)}
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -529,14 +541,14 @@ export default function RolesPage() {
             <div className="relative">
               <MdSearch
                 size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                className="absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ color: textMuted(isDark) }}
               />
               <input
                 value={positionQuery}
                 onChange={(e) => setPositionQuery(e.target.value)}
                 placeholder={t('rolesPage.searchPositions')}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl outline-none text-sm"
+                className="w-full ps-10 pe-4 py-2.5 rounded-xl outline-none text-sm"
                 style={{
                   border: `1px solid ${borderSubtle(isDark)}`,
                   background: isDark ? 'rgba(0,0,0,0.35)' : '#fff',
@@ -552,7 +564,7 @@ export default function RolesPage() {
               <button
                 type="button"
                 onClick={() => pickTemplate(null)}
-                className="w-full text-left px-3 py-2 rounded-lg text-sm"
+                className="w-full text-start px-3 py-2 rounded-lg text-sm"
                 style={{
                   background:
                     selectedTemplateKey === null
@@ -568,15 +580,15 @@ export default function RolesPage() {
                   {t('rolesPage.customRoleDesc')}
                 </span>
               </button>
-              {filteredTemplates.map((t) => (
+              {filteredTemplates.map((tmpl) => (
                 <button
-                  key={t.key}
+                  key={tmpl.key}
                   type="button"
-                  onClick={() => pickTemplate(t.key)}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm"
+                  onClick={() => pickTemplate(tmpl.key)}
+                  className="w-full text-start px-3 py-2 rounded-lg text-sm"
                   style={{
                     background:
-                      selectedTemplateKey === t.key
+                      selectedTemplateKey === tmpl.key
                         ? isDark
                           ? 'rgba(168,85,247,0.2)'
                           : 'rgba(168,85,247,0.12)'
@@ -584,12 +596,12 @@ export default function RolesPage() {
                     color: textPrimary(isDark),
                   }}
                 >
-                  <span className="font-medium">{t.name}</span>
-                  <span className="text-xs ml-2" style={{ color: textMuted(isDark) }}>
-                    {DEPT_LABEL[t.department] || t.department}
+                  <span className="font-medium">{localizePositionName(tmpl.key, tmpl.name, t)}</span>
+                  <span className="text-xs ms-2" style={{ color: textMuted(isDark) }}>
+                    {localizeDeptLabel(tmpl.department, t)}
                   </span>
                   <span className="block text-xs mt-0.5" style={{ color: textSecondary(isDark) }}>
-                    {t.description}
+                    {localizePositionDesc(tmpl.key, tmpl.description, t)}
                   </span>
                 </button>
               ))}
@@ -640,7 +652,7 @@ export default function RolesPage() {
           <div>
             <p className="text-sm font-semibold mb-3" style={{ color: textPrimary(isDark) }}>
               {t('rolesPage.permissions')}
-              <span className="text-xs font-normal ml-2" style={{ color: textMuted(isDark) }}>
+              <span className="text-xs font-normal ms-2" style={{ color: textMuted(isDark) }}>
                 {t('rolesPage.permissionsSelected', { n: createPerms.length })}
               </span>
             </p>
@@ -736,7 +748,7 @@ export default function RolesPage() {
                     <button
                       type="button"
                       onClick={() => selectRole(r)}
-                      className="flex-1 text-left px-3 py-2.5 rounded-xl text-sm min-w-0"
+                      className="flex-1 text-start px-3 py-2.5 rounded-xl text-sm min-w-0"
                       style={{ color: textPrimary(isDark) }}
                     >
                       <div className="font-medium truncate">{localizeRoleName(r.name, t)}</div>
@@ -782,9 +794,9 @@ export default function RolesPage() {
                         <h3 className="font-semibold text-base" style={{ color: textPrimary(isDark) }}>
                           {localizeRoleName(selected.name, t)}
                         </h3>
-                        {selected.description && (
+                        {localizeRoleDescription(selected.name, selected.description, t) && (
                           <p className="text-sm" style={{ color: textSecondary(isDark) }}>
-                            {selected.description}
+                            {localizeRoleDescription(selected.name, selected.description, t)}
                           </p>
                         )}
                         <p className="text-xs" style={{ color: textMuted(isDark) }}>

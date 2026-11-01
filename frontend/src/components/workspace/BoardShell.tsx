@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import SafeAppShell from '@/components/SafeDashboard/SafeAppShell';
 import type { NavEntry } from '@/components/SafeDashboard/SafeSidebar';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { localizedDepartmentLabel } from '@/lib/department-i18n';
 import { safeReturnPath } from '@/lib/nav-from';
 
 const Icon = ({ d, size = 17 }: { d: string | string[]; size?: number }) => (
@@ -28,6 +29,8 @@ function BoardShellInner({
   workspaceId,
   boardId,
   boardName,
+  departmentKey,
+  departmentName,
   canSettings,
   guestMode,
   children,
@@ -35,6 +38,8 @@ function BoardShellInner({
   workspaceId: string;
   boardId: string;
   boardName: string;
+  departmentKey?: string | null;
+  departmentName?: string | null;
   canSettings: boolean;
   guestMode?: boolean;
   children: React.ReactNode;
@@ -91,7 +96,11 @@ function BoardShellInner({
       routes={routes}
       activeId={activeId}
       brandTitle="Enterhub"
-      brandSubtitle={boardName}
+      brandSubtitle={
+        departmentKey || departmentName
+          ? `${localizedDepartmentLabel(t, departmentKey, departmentName)} · ${boardName}`
+          : boardName
+      }
       fullBleed
     >
       <div className="h-full w-full min-w-0 overflow-auto px-3 xs:px-4 sm:px-6 3xl:px-8 py-4 sm:py-5">{children}</div>
@@ -103,6 +112,8 @@ export function BoardShell(props: {
   workspaceId: string;
   boardId: string;
   boardName: string;
+  departmentKey?: string | null;
+  departmentName?: string | null;
   canSettings: boolean;
   guestMode?: boolean;
   children: React.ReactNode;

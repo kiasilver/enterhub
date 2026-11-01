@@ -37,11 +37,13 @@ export function WorkspaceTopbar({
   isDark,
   onMenuToggle,
   canManageWorkspace = false,
+  avatarUrl: avatarUrlProp,
 }: {
   workspaceId: string;
   isDark: boolean;
   onMenuToggle: () => void;
   canManageWorkspace?: boolean;
+  avatarUrl?: string | null;
 }) {
   const router = useRouter();
   const { data: session } = useSession();
@@ -190,6 +192,7 @@ export function WorkspaceTopbar({
     .join('')
     .slice(0, 2)
     .toUpperCase();
+  const avatarSrc = avatarUrlProp || session?.user?.image || null;
 
   return (
     <>
@@ -404,14 +407,22 @@ export function WorkspaceTopbar({
               style={{ background: profileOpen ? surfaceHover(isDark) : 'transparent' }}
             >
               <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold overflow-hidden relative"
                 style={{
                   background: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)',
                   color: textPrimary(isDark),
-                  position: 'relative',
                 }}
               >
-                {initials}
+                {avatarSrc ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={avatarSrc}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  initials
+                )}
                 <span
                   className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2"
                   style={{

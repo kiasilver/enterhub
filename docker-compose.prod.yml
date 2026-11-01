@@ -1,0 +1,33 @@
+# Host nginx handles TLS; only DB + Redis here.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: enterhub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: enterhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: enterhub
+    ports:
+      - "127.0.0.1:5437:5432"
+    volumes:
+      - enterhub_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enterhub -d enterhub"]
+      interval: 60s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: enterhub-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - enterhub_redis_data:/data
+
+volumes:
+  enterhub_postgres_data:
+  enterhub_redis_data:

@@ -202,6 +202,34 @@ export function AccountHelp({
   return (
     <div className="space-y-5">
       <motion.div variants={accountFadeUp} className="rounded-2xl p-5 sm:p-6 space-y-3" style={card}>
+        <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: mut }}>
+          {t('guidePage.eyebrow')}
+        </p>
+        <h3 className="text-base font-bold" style={{ color: pri }}>
+          {t('guidePage.title')}
+        </h3>
+        <p className="text-sm" style={{ color: sec }}>
+          {t('guidePage.subtitle')}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/guide"
+            className="inline-flex items-center justify-center min-h-[40px] px-4 rounded-xl text-sm font-semibold"
+            style={{ background: primaryColor, color: '#fff' }}
+          >
+            {t('learn.openGuide')}
+          </Link>
+          <Link
+            href="/guide?topic=email"
+            className="inline-flex items-center justify-center min-h-[40px] px-4 rounded-xl text-sm font-semibold"
+            style={{ border: `1px solid ${borderSubtle(isDark)}`, color: pri }}
+          >
+            {t('emailPage.seeGuide')}
+          </Link>
+        </div>
+      </motion.div>
+
+      <motion.div variants={accountFadeUp} className="rounded-2xl p-5 sm:p-6 space-y-3" style={card}>
         <h3 className="text-base font-bold" style={{ color: pri }}>
           {t('account.faqTitle')}
         </h3>

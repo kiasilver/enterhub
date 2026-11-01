@@ -10,7 +10,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -39,8 +38,60 @@ type Props = {
   filtersActive: boolean;
 };
 
-function shortName(name: string, max = 12) {
+function shortName(name: string, max = 18) {
   return name.length > max ? `${name.slice(0, max)}…` : name;
+}
+
+function ChartLegend({
+  items,
+  isDark,
+}: {
+  items: { name: string; color: string }[];
+  isDark: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 mt-3 px-3" dir="auto">
+      {items.map((it) => (
+        <span
+          key={it.name}
+          className="inline-flex items-center gap-2 text-xs leading-none"
+          style={{ color: textSecondary(isDark) }}
+        >
+          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: it.color }} />
+          <span className="whitespace-nowrap">{it.name}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RtlTick({
+  x = 0,
+  y = 0,
+  payload,
+  fill,
+  textAnchor = 'end',
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value?: string };
+  fill: string;
+  textAnchor?: string;
+}) {
+  return (
+    <text
+      x={x}
+      y={y}
+      dy={4}
+      fill={fill}
+      textAnchor={textAnchor}
+      fontSize={11}
+      direction="rtl"
+      style={{ unicodeBidi: 'isolate' }}
+    >
+      {payload?.value || ''}
+    </text>
+  );
 }
 
 export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
@@ -64,7 +115,8 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
   const cardBg = surfaceItem(isDark);
   const elevatedBg = 'transparent';
   const cardBorder = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
-  const tick = { fill: textMuted(isDark), fontSize: 11 };
+  const tickFill = textSecondary(isDark);
+  const tick = { fill: tickFill, fontSize: 11 };
   const tooltipStyle = chartTooltipStyle(isDark);
   const tooltipLabel = chartTooltipLabelStyle(isDark);
   const tooltipItem = chartTooltipItemStyle(isDark);
@@ -299,8 +351,8 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
             style={{ background: cardBg, border: `1px solid ${cardBorder}` }}
           >
             <p
-              className="text-[11px] font-bold uppercase tracking-wider"
-              style={{ color: textMuted(isDark) }}
+              className="text-[11px] font-semibold"
+              style={{ color: textSecondary(isDark) }}
             >
               {k.label}
             </p>
@@ -319,11 +371,15 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <WidgetFrame title={t('projectsPage.chartOpenVsDone')} isDark={isDark} elevated className="lg:col-span-2">
-          <div className="h-[280px]">
+          <div className="h-[280px]" dir="ltr">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byProject} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+              <BarChart data={byProject} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={borderSubtle(isDark)} />
-                <XAxis dataKey="name" tick={tick} />
+                <XAxis
+                  dataKey="name"
+                  tick={<RtlTick fill={tickFill} textAnchor="middle" />}
+                  interval={0}
+                />
                 <YAxis tick={tick} allowDecimals={false} />
                 <Tooltip
                   contentStyle={tooltipStyle}
@@ -342,12 +398,18 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
                     (payload?.[0]?.payload as { fullName?: string } | undefined)?.fullName || ''
                   }
                 />
-                <Legend />
                 <Bar dataKey="open" name={t('projectsPage.colOpen')} fill="#3b82f6" radius={[4, 4, 0, 0]} stackId="a" />
                 <Bar dataKey="done" name={t('projectsPage.colDone')} fill="#22c55e" radius={[4, 4, 0, 0]} stackId="a" />
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <ChartLegend
+            isDark={isDark}
+            items={[
+              { name: t('projectsPage.colOpen'), color: '#3b82f6' },
+              { name: t('projectsPage.colDone'), color: '#22c55e' },
+            ]}
+          />
         </WidgetFrame>
 
         <WidgetFrame title={t('projectsPage.chartHealth')} isDark={isDark} elevated>
@@ -357,56 +419,74 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
                 {t('projectsPage.noHealthData')}
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={byHealth}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={3}
-                  >
-                    {byHealth.map((entry) => (
-                      <Cell key={entry.name} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabel} itemStyle={tooltipItem} cursor={{ fill: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="h-full" dir="ltr">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={byHealth}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={55}
+                      outerRadius={82}
+                      paddingAngle={3}
+                    >
+                      {byHealth.map((entry) => (
+                        <Cell key={entry.name} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabel} itemStyle={tooltipItem} cursor={{ fill: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
             )}
           </div>
+          {byHealth.length > 0 && (
+            <ChartLegend
+              isDark={isDark}
+              items={byHealth.map((d) => ({ name: d.name, color: d.color }))}
+            />
+          )}
         </WidgetFrame>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <WidgetFrame title={t('projectsPage.chartDeptWorkload')} isDark={isDark} elevated>
-          <div className="h-[260px]">
+          <div className="h-[280px]" dir="ltr">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={byDepartment.slice(0, 8)}
                 layout="vertical"
-                margin={{ top: 4, right: 12, left: 8, bottom: 0 }}
+                margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke={borderSubtle(isDark)} horizontal={false} />
                 <XAxis type="number" tick={tick} allowDecimals={false} />
-                <YAxis type="category" dataKey="name" width={100} tick={tick} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={148}
+                  tick={<RtlTick fill={tickFill} textAnchor="end" />}
+                />
                 <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabel} itemStyle={tooltipItem} cursor={{ fill: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }} />
-                <Legend />
                 <Bar dataKey="open" name={t('projectsPage.colOpen')} fill="#3b82f6" stackId="d" radius={[0, 4, 4, 0]} />
                 <Bar dataKey="done" name={t('projectsPage.colDone')} fill="#22c55e" stackId="d" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
+          <ChartLegend
+            isDark={isDark}
+            items={[
+              { name: t('projectsPage.colOpen'), color: '#3b82f6' },
+              { name: t('projectsPage.colDone'), color: '#22c55e' },
+            ]}
+          />
         </WidgetFrame>
 
         <WidgetFrame title={t('projectsPage.chartByManager')} isDark={isDark} elevated>
-          <div className="h-[260px]">
+          <div className="h-[260px]" dir="ltr">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byManager} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+              <BarChart data={byManager} margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={borderSubtle(isDark)} />
-                <XAxis dataKey="name" tick={tick} />
+                <XAxis dataKey="name" tick={<RtlTick fill={tickFill} textAnchor="middle" />} />
                 <YAxis tick={tick} allowDecimals={false} />
                 <Tooltip
                   contentStyle={tooltipStyle} labelStyle={tooltipLabel} itemStyle={tooltipItem}
@@ -423,7 +503,7 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <WidgetFrame title={t('projectsPage.chartAccessMix')} isDark={isDark} elevated>
-          <div className="h-[220px]">
+          <div className="h-[200px]" dir="ltr">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -432,17 +512,20 @@ export function ProjectsOverview({ boards, isDark, filtersActive }: Props) {
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  outerRadius={80}
+                  outerRadius={72}
                 >
                   {byAccess.map((entry) => (
                     <Cell key={entry.name} fill={entry.color} />
                   ))}
                 </Pie>
                 <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabel} itemStyle={tooltipItem} cursor={{ fill: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }} />
-                <Legend />
               </PieChart>
             </ResponsiveContainer>
           </div>
+          <ChartLegend
+            isDark={isDark}
+            items={byAccess.map((d) => ({ name: d.name, color: d.color }))}
+          />
         </WidgetFrame>
 
         <WidgetFrame title={t('projectsPage.chartAtRisk')} isDark={isDark} elevated>
@@ -504,7 +587,7 @@ function ExportBtn({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors"
+      className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors"
       style={{
         background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
         border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'}`,

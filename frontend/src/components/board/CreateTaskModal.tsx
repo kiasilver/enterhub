@@ -5,19 +5,21 @@ import { useSession } from 'next-auth/react';
 import {
   MdAccessTime,
   MdAttachFile,
-  MdCheckBox,
   MdClose,
   MdFolderOpen,
   MdFlag,
   MdLabel,
   MdPersonAdd,
+  MdSupervisorAccount,
 } from 'react-icons/md';
 import { CARD_PRIORITIES, type CardPriorityValue } from '@/lib/workspace-labels';
 import {
-  DEFAULT_CHECKLIST,
-  insertChecklistItem,
-  isChecklistBookend,
+  defaultChecklistDrafts,
+  isChecklistEnd,
+  isChecklistStart,
+  type ChecklistDraftItem,
 } from '@/lib/checklist-defaults';
+import { ChecklistEditor } from '@/components/board/ChecklistEditor';
 import { AppDateRangePicker } from '@/components/ui/AppDateRangePicker';
 import { AppDurationPicker } from '@/components/ui/AppDurationPicker';
 import {
@@ -30,13 +32,22 @@ import {
 } from '@/components/SafeDashboard/theme';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import {
-  localizeChecklistTitle,
   localizeListTitle,
   localizePrioritySelect,
+  localizeProjectName,
   localizeWorkspaceLabel,
 } from '@/lib/list-i18n';
 
-type BoardOption = { id: string; name: string };
+type ChecklistDraftRow = ChecklistDraftItem & { id: string };
+
+function seedChecklistDrafts(): ChecklistDraftRow[] {
+  return defaultChecklistDrafts().map((item) => ({
+    ...item,
+    id: `draft-${crypto.randomUUID()}`,
+  }));
+}
+
+type BoardOption = { id: string; name: string; isGeneral?: boolean };
 type ListOption = { id: string; title: string };
 type MemberOption = { userId: string; label: string };
 type LabelOption = { id: string; name: string; color: string };
@@ -70,6 +81,8 @@ export type CreateTaskModalProps = {
   onCreated?: () => void | Promise<void>;
   /** Prefill / lock project when opening from a board column */
   initialBoardId?: string | null;
+  /** Prefill list when opening from a board column */
+  initialListId?: string | null;
   /** Limit project dropdown (e.g. department projects only) */
   boardOptions?: BoardOption[] | null;
   lockBoard?: boolean;
@@ -82,6 +95,7 @@ export function CreateTaskModal({
   onClose,
   onCreated,
   initialBoardId = null,
+  initialListId = null,
   boardOptions = null,
   lockBoard = false,
 }: CreateTaskModalProps) {
@@ -104,7 +118,8 @@ export function CreateTaskModal({
   const [labelIds, setLabelIds] = useState<string[]>([]);
   const [labelOptions, setLabelOptions] = useState<LabelOption[]>([]);
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
-  const [checklistItems, setChecklistItems] = useState<string[]>([]);
+  const [supervisorId, setSupervisorId] = useState('');
+  const [checklistItems, setChecklistItems] = useState<ChecklistDraftRow[]>([]);
   const [checklistDraft, setChecklistDraft] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [createBusy, setCreateBusy] = useState(false);
@@ -114,8 +129,9 @@ export function CreateTaskModal({
   useEffect(() => {
     if (!open) return;
     setTitle('');
-    setChecklistItems([...DEFAULT_CHECKLIST]);
+    setChecklistItems(seedChecklistDrafts());
     setChecklistDraft('');
+    setSupervisorId('');
     setAttachments([]);
     setDescription('');
     setPriority('NONE');
@@ -141,14 +157,17 @@ export function CreateTaskModal({
         if (boardsRes) {
           const boardsJson = await boardsRes.json();
           if (!boardsRes.ok) {
-            setCreateError(boardsJson.error || 'Failed to load boards');
+            setCreateError(boardsJson.error || t('common.loadFailed'));
             setBoards([]);
             return;
           }
-          opts = (boardsJson.data || []).map((b: { id: string; name: string }) => ({
-            id: b.id,
-            name: b.name,
-          }));
+          opts = (boardsJson.data || []).map(
+            (b: { id: string; name: string; isGeneral?: boolean }) => ({
+              id: b.id,
+              name: b.name,
+              isGeneral: b.isGeneral,
+            }),
+          );
         }
         setBoards(opts);
         setBoardId((prev) => {
@@ -190,7 +209,7 @@ export function CreateTaskModal({
           setLabelOptions([]);
         }
       } catch (e) {
-        setCreateError(e instanceof Error ? e.message : 'Failed to load boards');
+        setCreateError(e instanceof Error ? e.message : t('common.loadFailed'));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,16 +224,22 @@ export function CreateTaskModal({
     if (!open || !boardId) {
       setLists([]);
       setListId('');
+      setListsLoading(false);
       return;
     }
+    // Drop previous board's listId immediately — stale ids cause 400 "List not on this board"
+    setLists([]);
+    setListId('');
+    let cancelled = false;
     void (async () => {
       setListsLoading(true);
       setCreateError(null);
       try {
         const res = await fetch(`/api/boards/${boardId}/cards`);
         const json = await res.json();
+        if (cancelled) return;
         if (!res.ok) {
-          setCreateError(json.error || 'Failed to load lists');
+          setCreateError(json.error || t('common.loadFailed'));
           setLists([]);
           setListId('');
           return;
@@ -223,16 +248,24 @@ export function CreateTaskModal({
           (l: { id: string; title: string }) => ({ id: l.id, title: l.title }),
         );
         setLists(opts);
-        setListId(opts[0]?.id ?? '');
+        setListId(
+          initialListId && opts.some((o) => o.id === initialListId)
+            ? initialListId
+            : opts[0]?.id ?? '',
+        );
       } catch (e) {
-        setCreateError(e instanceof Error ? e.message : 'Failed to load lists');
+        if (cancelled) return;
+        setCreateError(e instanceof Error ? e.message : t('common.loadFailed'));
         setLists([]);
         setListId('');
       } finally {
-        setListsLoading(false);
+        if (!cancelled) setListsLoading(false);
       }
     })();
-  }, [open, boardId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, boardId, initialListId]);
 
   function toggleAssignee(userId: string) {
     setAssigneeIds((prev) =>
@@ -243,7 +276,27 @@ export function CreateTaskModal({
   function addChecklistItem() {
     const text = checklistDraft.trim();
     if (!text) return;
-    setChecklistItems((prev) => insertChecklistItem(prev, text));
+    setChecklistItems((prev) => {
+      const endIdx = prev.findIndex((x) => isChecklistEnd(x.title));
+      const row: ChecklistDraftRow = {
+        id: `draft-${crypto.randomUUID()}`,
+        title: text,
+        description: '',
+        noteOpen: false,
+      };
+      if (endIdx >= 0) {
+        const next = [...prev];
+        next.splice(endIdx, 0, row);
+        return next;
+      }
+      const startIdx = prev.findIndex((x) => isChecklistStart(x.title));
+      if (startIdx >= 0) {
+        const next = [...prev];
+        next.splice(startIdx + 1, 0, row);
+        return next;
+      }
+      return [...prev, row];
+    });
     setChecklistDraft('');
   }
 
@@ -260,31 +313,44 @@ export function CreateTaskModal({
       }
       if (next.length) setAttachments((prev) => [...prev, ...next].slice(0, 10));
     } catch (e) {
-      setCreateError(e instanceof Error ? e.message : 'Failed to read files');
+      setCreateError(e instanceof Error ? e.message : t('common.failed'));
     }
   }
 
   async function handleCreateTask(e: FormEvent) {
     e.preventDefault();
-    const trimmed = title.trim();
-    if (!trimmed || !boardId || !listId || createBusy) return;
+    if (createBusy || !boardId || !listId || listsLoading) return;
+    if (!lists.some((l) => l.id === listId)) {
+      setCreateError(t('boardTask.listNotReady'));
+      return;
+    }
+    let trimmed = title.trim();
+    if (!trimmed && description.trim()) {
+      trimmed = description.trim().split('\n')[0].slice(0, 300);
+      setTitle(trimmed);
+    }
+    if (!trimmed) {
+      setCreateError(t('boardTask.titleRequired'));
+      return;
+    }
     setCreateBusy(true);
     setCreateError(null);
     try {
       const ids = assigneeIds.length > 0 ? assigneeIds : myUserId ? [myUserId] : [];
       const hours = Number(estimatedHours);
-      if (ids.length > 0) {
-        if (!startDate || !dueDate) {
-          setCreateError('Due date range (start and end) is required when assigning a task');
-          setCreateBusy(false);
-          return;
-        }
-        if (!estimatedHours || Number.isNaN(hours) || hours <= 0) {
-          setCreateError('Estimated time is required when assigning a task');
-          setCreateBusy(false);
-          return;
-        }
+      if (ids.length > 0 && (!startDate || !dueDate)) {
+        setCreateError(t('boardTask.dueRangeRequired'));
+        setCreateBusy(false);
+        return;
       }
+      const checklist = checklistItems
+        .filter((item) => item.title.trim())
+        .map((item) => ({
+          title: item.title.trim(),
+          ...(item.noteOpen && item.description.trim()
+            ? { description: item.description.trim() }
+            : {}),
+        }));
       const res = await fetch(`/api/boards/${boardId}/cards`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,24 +359,27 @@ export function CreateTaskModal({
           listId,
           assigneeIds: ids,
           priority,
+          ...(supervisorId ? { supervisorId } : {}),
           ...(labelIds.length ? { labelIds } : {}),
           ...(description.trim() ? { description: description.trim() } : {}),
           ...(startDate ? { startDate } : {}),
           ...(dueDate ? { dueDate } : {}),
-          ...(estimatedHours ? { estimatedHours: hours } : {}),
-          ...(checklistItems.length ? { checklist: checklistItems } : {}),
+          ...(estimatedHours && !Number.isNaN(hours) && hours > 0
+            ? { estimatedHours: hours }
+            : {}),
+          ...(checklist.length ? { checklist } : {}),
           ...(attachments.length ? { attachments } : {}),
         }),
       });
       const json = await res.json();
       if (!res.ok) {
-        setCreateError(json.error || 'Could not create task');
+        setCreateError(json.error || t('projectsPage.createFailed'));
         return;
       }
       onClose();
       await onCreated?.();
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Could not create task');
+      setCreateError(err instanceof Error ? err.message : t('projectsPage.createFailed'));
     } finally {
       setCreateBusy(false);
     }
@@ -367,16 +436,23 @@ export function CreateTaskModal({
 
           <div className="grid grid-cols-1 md:grid-cols-[1fr_240px] gap-6">
             <div className="space-y-5 min-w-0">
-              <input
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={300}
-                placeholder={t('boardTask.taskTitle')}
-                className="w-full text-xl font-bold bg-transparent outline-none rounded-lg px-1 py-0.5"
-                style={{ color: textPrimary(isDark) }}
-                autoFocus
-              />
+              <div>
+                <label
+                  className="text-xs font-medium block mb-1.5"
+                  style={{ color: textMuted(isDark) }}
+                >
+                  {t('boardTask.taskTitle')}
+                </label>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  maxLength={300}
+                  placeholder={t('boardTask.taskTitle')}
+                  className="w-full px-3 py-2 rounded-xl text-sm outline-none"
+                  style={fieldStyle}
+                  autoFocus
+                />
+              </div>
 
               <div>
                 <label
@@ -396,80 +472,63 @@ export function CreateTaskModal({
                 />
               </div>
 
-              <div>
-                <p
-                  className="text-xs font-medium mb-2 inline-flex items-center gap-1.5"
-                  style={{ color: textMuted(isDark) }}
-                >
-                  <MdCheckBox size={14} />
-                  {t('boardTask.checklist')}
-                  {checklistItems.length > 0 ? ` · ${checklistItems.length}` : ''}
-                </p>
-                <ul className="space-y-1.5 mb-2">
-                  {checklistItems.map((item, i) => {
-                    const locked = isChecklistBookend(item);
-                    return (
-                      <li
-                        key={`${item}-${i}`}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
-                        style={{ background: surfaceItem(isDark) }}
-                      >
-                        <input type="checkbox" disabled className="opacity-40" />
-                        <span
-                          className="flex-1 text-sm truncate"
-                          style={{
-                            color: textPrimary(isDark),
-                            fontWeight: locked ? 600 : undefined,
-                          }}
-                        >
-                          {localizeChecklistTitle(item, t)}
-                        </span>
-                        {!locked && (
-                          <button
-                            type="button"
-                            aria-label={t('common.remove')}
-                            onClick={() =>
-                              setChecklistItems((prev) =>
-                                prev.filter((_, idx) => idx !== i),
-                              )
-                            }
-                            className="p-1 rounded"
-                            style={{ color: textMuted(isDark) }}
-                          >
-                            <MdClose size={14} />
-                          </button>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-                <div className="flex gap-2">
-                  <input
-                    value={checklistDraft}
-                    onChange={(e) => setChecklistDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addChecklistItem();
-                      }
-                    }}
-                    placeholder={t('boardTask.addChecklistItem')}
-                    className="flex-1 px-3 py-1.5 rounded-lg bg-transparent text-sm outline-none"
-                    style={fieldStyle}
-                  />
-                  <button
-                    type="button"
-                    onClick={addChecklistItem}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold"
-                    style={{
-                      border: `1px solid ${borderSubtle(isDark)}`,
-                      color: textSecondary(isDark),
-                    }}
-                  >
-                    {t('boardTask.add')}
-                  </button>
-                </div>
-              </div>
+              <ChecklistEditor
+                isDark={isDark}
+                mode="create"
+                canEdit
+                draft={checklistDraft}
+                onDraftChange={setChecklistDraft}
+                onAdd={addChecklistItem}
+                items={checklistItems.map((item) => ({
+                  id: item.id,
+                  title: item.title,
+                  description: item.description,
+                  isDone: false,
+                }))}
+                noteOpen={Object.fromEntries(
+                  checklistItems.map((item) => [item.id, item.noteOpen]),
+                )}
+                onToggleNote={(id, open) => {
+                  setChecklistItems((prev) =>
+                    prev.map((row) =>
+                      row.id === id
+                        ? {
+                            ...row,
+                            noteOpen: open,
+                            description: open ? row.description : '',
+                          }
+                        : row,
+                    ),
+                  );
+                }}
+                onTitleChange={(id, title) => {
+                  setChecklistItems((prev) =>
+                    prev.map((row) => (row.id === id ? { ...row, title } : row)),
+                  );
+                }}
+                onNoteChange={(id, description) => {
+                  setChecklistItems((prev) =>
+                    prev.map((row) =>
+                      row.id === id ? { ...row, description } : row,
+                    ),
+                  );
+                }}
+                onRemove={(id) => {
+                  setChecklistItems((prev) => prev.filter((row) => row.id !== id));
+                }}
+                onReorder={(orderedMiddleIds) => {
+                  setChecklistItems((prev) => {
+                    const start = prev.filter((i) => isChecklistStart(i.title));
+                    const end = prev.filter((i) => isChecklistEnd(i.title));
+                    const byId = new Map(prev.map((i) => [i.id, i]));
+                    const middle = orderedMiddleIds
+                      .map((id) => byId.get(id))
+                      .filter(Boolean) as ChecklistDraftRow[];
+                    return [...start, ...middle, ...end];
+                  });
+                }}
+                fieldStyle={fieldStyle}
+              />
 
               <div>
                 <p
@@ -538,7 +597,11 @@ export function CreateTaskModal({
                 <select
                   required
                   value={boardId}
-                  onChange={(e) => setBoardId(e.target.value)}
+                  onChange={(e) => {
+                    setBoardId(e.target.value);
+                    setListId('');
+                    setLists([]);
+                  }}
                   disabled={lockBoard}
                   className="w-full rounded-lg px-2.5 py-2 text-sm outline-none bg-transparent disabled:opacity-70"
                   style={fieldStyle}
@@ -548,7 +611,7 @@ export function CreateTaskModal({
                   )}
                   {boards.map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.name}
+                      {localizeProjectName(b.name, t, b.isGeneral)}
                     </option>
                   ))}
                 </select>
@@ -626,6 +689,33 @@ export function CreateTaskModal({
                   className="text-xs font-medium mb-2 inline-flex items-center gap-1.5"
                   style={{ color: textMuted(isDark) }}
                 >
+                  <MdSupervisorAccount size={14} />
+                  {t('boardTask.supervisorOptional')}
+                </p>
+                <select
+                  value={supervisorId}
+                  onChange={(e) => setSupervisorId(e.target.value)}
+                  className="w-full rounded-lg px-2.5 py-2 text-sm outline-none bg-transparent"
+                  style={fieldStyle}
+                >
+                  <option value="">{t('boardTask.noSupervisor')}</option>
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.label}
+                      {m.userId === myUserId ? ` ${t('boardTask.you')}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] mt-1.5" style={{ color: textMuted(isDark) }}>
+                  {t('boardTask.supervisorHint')}
+                </p>
+              </div>
+
+              <div>
+                <p
+                  className="text-xs font-medium mb-2 inline-flex items-center gap-1.5"
+                  style={{ color: textMuted(isDark) }}
+                >
                   <MdAccessTime size={14} />
                   {t('boardTask.dueDate')}
                 </p>
@@ -642,7 +732,8 @@ export function CreateTaskModal({
 
               <div>
                 <p className="text-xs font-medium mb-2" style={{ color: textMuted(isDark) }}>
-                  {t('boardTask.estimatedTime')}
+                  {t('boardTask.estimatedTime')}{' '}
+                  <span className="font-normal">({t('boardTask.estimatedOptional')})</span>
                 </p>
                 <AppDurationPicker
                   value={estimatedHours}
@@ -716,7 +807,13 @@ export function CreateTaskModal({
               <div className="pt-2 space-y-2">
                 <button
                   type="submit"
-                  disabled={createBusy || !boardId || !listId || !title.trim()}
+                  disabled={
+                    createBusy ||
+                    listsLoading ||
+                    !boardId ||
+                    !listId ||
+                    !lists.some((l) => l.id === listId)
+                  }
                   className="w-full px-3 py-2.5 rounded-xl text-xs font-semibold text-white disabled:opacity-50"
                   style={{ background: isDark ? 'rgba(37,99,235,0.9)' : '#2563eb' }}
                 >

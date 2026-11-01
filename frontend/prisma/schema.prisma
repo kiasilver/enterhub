@@ -168,6 +168,8 @@ model User {
   lastLoginAt        DateTime?
   /// When true, user still needs to finish company onboarding wizard (if they chose "I have a company").
   pendingOnboarding  Boolean  @default(false)
+  /// Set after SMS temp-password reset; user must change password in account settings.
+  mustChangePassword Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -180,6 +182,7 @@ model User {
   cardAssignees   CardAssignee[]
   createdCards    Card[]            @relation("CardCreator")
   approvedCards   Card[]            @relation("CardApprover")
+  supervisedCards Card[]            @relation("CardSupervisor")
   cardViews       CardView[]
   createdLabels   WorkspaceLabel[]  @relation("LabelCreator")
   notifications   Notification[]    @relation("NotificationRecipient")
@@ -190,6 +193,7 @@ model User {
   boardGuests     BoardGuest[]
   emailOtps       EmailOtp[]
   phoneOtps       PhoneOtp[]
+  passwordResetTokens PasswordResetToken[]
   chatMemberships ChatRoomMember[]
   chatMessages    ChatMessage[]
   chatReactions   ChatReaction[]
@@ -253,7 +257,7 @@ model UserNotificationPrefs {
   telegramEnabled  Boolean @default(false)
   telegramChatId   String?
   telegramUsername String?
-  /// Granular channels (JSON): chatMention, letter, mail, assignment — each { inApp, telegram, email }
+  /// Granular channels (JSON): assignment, taskSupervisor, mention, chatMention, taskApproval, invite, department, letter, mail, otp — each { inApp, email, telegram }
   channels         Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -315,6 +319,23 @@ model SupportMessage {
 
   @@index([ticketId, createdAt])
   @@map("support_messages")
+}
+
+/// One-time password-reset links emailed to the user.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 /// Email OTP codes for verification / login (production). Skipped automatically on localhost.
@@ -397,7 +418,7 @@ model Workspace {
   /// Org security: require 2FA for all members before workspace access.
   enforce2FA             Boolean @default(false)
   /// Idle / absolute session lifetime in hours (Org Admin policy).
-  sessionTimeoutHours    Int     @default(24)
+  sessionTimeoutHours    Int     @default(168)
   /// Allowed CIDR blocks as JSON string array, e.g. ["10.0.0.0/8","203.0.113.0/24"]. Empty = no IP restriction.
   ipAllowlist            Json?
   /// Branding: light-mode / default logo URL (or data URL). Null → letter avatar.
@@ -406,6 +427,8 @@ model Workspace {
   logoUrlDark            String?
   /// Hex background for letter-avatar fallback (e.g. #3B82F6).
   logoColor              String?
+  /// When false, chrome shows only the logo (no company name next to it).
+  showCompanyName        Boolean @default(true)
   /// Size band from onboarding.
   employeeBand           EmployeeBand?
   /// Selected department keys JSON string[], e.g. ["finance","it","hr","marketing"].
@@ -496,6 +519,9 @@ model WorkspaceInvite {
   id              String                @id @default(cuid())
   workspaceId     String
   departmentId    String?
+  /// Extra departments for early-stage multi-dept access (JSON string[]).
+  /// Combined with departmentId on activate.
+  departmentIds   Json?
   email           String
   /// Target user once known / created
   inviteeUserId   String?
@@ -614,6 +640,12 @@ model Board {
   name         String
   description  String?
   background   String? // CSS / image URL
+  /// Optional project accent (hex). Null → hashed palette color.
+  color        String?
+  /// Optional Material icon ligature. Null → letter mark (not department icon).
+  icon         String?
+  /// Default inbox project for a department ("General" / عمومی). Always created with the department.
+  isGeneral    Boolean @default(false)
   visibility   BoardVisibility @default(PRIVATE)
   defaultView  BoardDefaultView @default(KANBAN)
   /// Public link controls (when visibility = PUBLIC)
@@ -636,6 +668,7 @@ model Board {
 
   @@index([workspaceId])
   @@index([departmentId])
+  @@index([departmentId, isGeneral])
   @@map("boards")
 }
 
@@ -683,8 +716,10 @@ model Card {
   /// Range start for the due window (dueDate = end).
   startDate   DateTime?
   priority    CardPriority @default(NONE)
-  /// Manager-set expected effort (hours) before employee can start.
+  /// Optional expected effort (hours). Due date range is the assignment gate.
   estimatedHours Float?
+  /// Optional task supervisor (oversees / can approve this card).
+  supervisorId String?
   workflowStatus CardWorkflowStatus @default(ASSIGNED)
   startedAt   DateTime?
   submittedAt DateTime?
@@ -703,6 +738,7 @@ model Card {
   list        List           @relation(fields: [listId], references: [id], onDelete: Cascade)
   createdBy   User?          @relation("CardCreator", fields: [createdById], references: [id], onDelete: SetNull)
   approvedBy  User?          @relation("CardApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  supervisor  User?          @relation("CardSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
   comments    Comment[]
   attachments Attachment[]
   assignees   CardAssignee[]
@@ -719,6 +755,7 @@ model Card {
 
   @@index([listId, order])
   @@index([createdById])
+  @@index([supervisorId])
   @@index([workflowStatus])
   @@index([approvedById])
   @@map("cards")
@@ -922,6 +959,8 @@ model ChecklistItem {
   id        String  @id @default(cuid())
   cardId    String
   title     String
+  /// Optional note shown when the creator ticks “add description”.
+  description String?
   isDone    Boolean @default(false)
   order     Float   @default(0)
   /// Optional promotion: checklist item → standalone card.
@@ -1551,6 +1590,10 @@ model PlatformSettings {
   googleAuthEnabled    Boolean @default(true)
   /// Override SMSIR_OTP_TEMPLATE_ID when set.
   smsirTemplateId      Int?
+  /// SMS.IR API key (x-api-key). Empty = fall back to SMSIR_API_KEY env.
+  smsirApiKey          String?
+  /// Per-template IDs: { login, register, temp_pass, assignment, supervisor, approval, invite, letter, mail }
+  smsirTemplatesJson   Json?
   zarinpalMerchantId   String?
   zarinpalSandbox      Boolean @default(true)
   /// Editable plan catalog JSON (optional override of plans-catalog.ts).

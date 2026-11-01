@@ -8,6 +8,7 @@ type Props = {
   logoUrlDark?: string | null;
   logoColor?: string | null;
   isDark: boolean;
+  /** Height of the mark. Width is auto when a logo image is set. */
   size?: number;
   className?: string;
   rounded?: string;
@@ -17,6 +18,8 @@ type Props = {
  * Theme-aware workspace mark.
  * - Light: uses logoUrl (light/white-mode asset)
  * - Dark: uses logoUrlDark when set; otherwise inverts the light logo colors
+ * - Image logos: transparent, height-fixed, width auto
+ * - No logo: square letter avatar
  */
 export function WorkspaceLogo({
   name,
@@ -34,6 +37,40 @@ export function WorkspaceLogo({
   const src = isDark ? logoUrlDark || logoUrl : logoUrl;
   const invertLightLogo = Boolean(isDark && !logoUrlDark && logoUrl);
 
+  if (src) {
+    return (
+      <div
+        className={`${rounded} flex items-center justify-center overflow-visible flex-shrink-0 ${className}`}
+        style={{
+          height: size,
+          width: 'auto',
+          maxWidth: Math.max(size * 5, 160),
+          background: 'transparent',
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt=""
+          className="block object-contain"
+          style={{
+            height: size,
+            width: 'auto',
+            maxHeight: size,
+            maxWidth: Math.max(size * 5, 160),
+            background: 'transparent',
+            ...(invertLightLogo
+              ? {
+                  filter: 'invert(1) hue-rotate(180deg)',
+                  mixBlendMode: 'normal' as const,
+                }
+              : {}),
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`${rounded} flex items-center justify-center overflow-hidden flex-shrink-0 font-black ${className}`}
@@ -41,29 +78,11 @@ export function WorkspaceLogo({
         width: size,
         height: size,
         fontSize: Math.max(10, Math.round(size * 0.35)),
-        background: src ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : color,
+        background: color,
         color: '#fff',
       }}
     >
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={src}
-          alt=""
-          className="w-full h-full object-contain p-0.5"
-          style={
-            invertLightLogo
-              ? {
-                  filter: 'invert(1) hue-rotate(180deg)',
-                  // Keeps soft logos readable on dark chrome
-                  mixBlendMode: 'normal',
-                }
-              : undefined
-          }
-        />
-      ) : (
-        initial
-      )}
+      {initial}
     </div>
   );
 }

@@ -97,7 +97,7 @@ export function AppDurationPicker({
   value,
   onChange,
   onCommit,
-  placeholder = 'Select duration',
+  placeholder,
   disabled = false,
   className = '',
   isDark: isDarkProp,
@@ -200,6 +200,7 @@ export function AppDurationPicker({
   const bg = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)';
   const hoverBg = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
   const live = formatDurationLabel(fromParts(draftH, draftM), t);
+  const durationPlaceholder = placeholder || t('boardTask.estimatedPlaceholder');
 
   return (
     <div className={`relative ${className}`}>
@@ -220,8 +221,8 @@ export function AppDurationPicker({
         }}
       >
         <MdAccessTime size={16} style={{ color: open ? accent : mut }} className="shrink-0" />
-        <span className="flex-1 text-left truncate">
-          {label || placeholder}
+        <span className="flex-1 text-start truncate">
+          {label || durationPlaceholder}
         </span>
         {label && !disabled && (
           <span
@@ -229,7 +230,7 @@ export function AppDurationPicker({
             tabIndex={0}
             className="p-0.5 rounded shrink-0"
             style={{ color: mut }}
-            aria-label="Clear duration"
+            aria-label={t('common.clearDuration')}
             onClick={(e) => {
               e.stopPropagation();
               onChange('');
@@ -269,10 +270,10 @@ export function AppDurationPicker({
                   ? '0 12px 36px rgba(0,0,0,0.45)'
                   : '0 12px 36px rgba(0,0,0,0.12)',
               }}
-              className="p-3 rounded-2xl"
+              className="p-3 rounded-2xl text-start"
             >
               <p className="text-[11px] font-medium mb-2 px-1" style={{ color: mut }}>
-                Estimated effort
+                {t('boardTask.estimatedEffort')}
               </p>
               <p
                 className="text-sm font-bold mb-3 px-1 tabular-nums"
@@ -280,8 +281,8 @@ export function AppDurationPicker({
               >
                 {live || '—'}
                 {fromParts(draftH, draftM) > 0 && (
-                  <span className="font-normal ml-2" style={{ color: mut }}>
-                    ({fromParts(draftH, draftM)} h)
+                  <span className="font-normal ms-2" style={{ color: mut }}>
+                    ({fromParts(draftH, draftM)} {t('boardTask.hours')})
                   </span>
                 )}
               </p>
@@ -311,7 +312,7 @@ export function AppDurationPicker({
 
               <div className="flex gap-2 h-[200px]">
                 <div
-                  className="flex-1 overflow-y-auto no-scrollbar flex flex-col gap-1 pr-1 border-r"
+                  className="flex-1 overflow-y-auto no-scrollbar flex flex-col gap-1 pe-1 border-e"
                   style={{ borderColor: border }}
                 >
                   <p
@@ -321,7 +322,7 @@ export function AppDurationPicker({
                       background: panelFill(isDark),
                     }}
                   >
-                    Hours
+                    {t('boardTask.hours')}
                   </p>
                   {HOUR_OPTS.map((hour) => (
                     <button
@@ -356,7 +357,7 @@ export function AppDurationPicker({
                       background: panelFill(isDark),
                     }}
                   >
-                    Minutes
+                    {t('boardTask.minutes')}
                   </p>
                   {MINUTE_OPTS.map((minute) => (
                     <button
@@ -379,7 +380,7 @@ export function AppDurationPicker({
                       }}
                     >
                       {String(minute).padStart(2, '0')}
-                      <span className="ml-1 text-[10px] opacity-70">min</span>
+                      <span className="ms-1 text-[10px] opacity-70">{t('boardTask.minShort')}</span>
                     </button>
                   ))}
                 </div>
@@ -391,7 +392,7 @@ export function AppDurationPicker({
                 style={{ background: accent }}
                 onClick={() => commitAndClose(draftH, draftM)}
               >
-                Done · {live || 'set duration'}
+                {t('boardTask.doneDuration', { label: live || t('boardTask.setDuration') })}
               </button>
             </motion.div>
           </AnimatePresence>,

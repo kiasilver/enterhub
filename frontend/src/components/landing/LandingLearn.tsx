@@ -12,6 +12,7 @@ import {
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { dictionaries } from '@/i18n';
 import { landingSurface, landingText } from './landing-theme';
+import { GUIDE_ROLE_ORDER, getGuideCopy } from '@/i18n/guide-content';
 
 type LearnKey = 'projects' | 'departments' | 'my-tasks' | 'analytics';
 type TabMsgKey = 'projects' | 'departments' | 'myTasks' | 'analytics';
@@ -31,6 +32,7 @@ export function LandingLearn({ isDark }: { isDark: boolean }) {
   const colors = landingText(isDark);
   const { t, lang } = useLang();
   const [active, setActive] = useState<LearnKey>('projects');
+  const guideCopy = getGuideCopy(lang);
   const currentMeta = TABS.find((tab) => tab.key === active) ?? TABS[0];
   const tabCopy = dictionaries[lang].learn.tabs[currentMeta.msgKey];
 
@@ -159,6 +161,54 @@ export function LandingLearn({ isDark }: { isDark: boolean }) {
           </div>
         </motion.div>
       </AnimatePresence>
+
+      <div
+        className="mt-8 sm:mt-10 rounded-2xl p-5 sm:p-7 max-w-3xl mx-auto text-center"
+        style={landingSurface(isDark)}
+      >
+        <h3 className="text-xl font-bold mb-2" style={{ color: colors.primary }}>
+          {t('learn.guideTitle')}
+        </h3>
+        <p className="text-sm sm:text-base mb-5" style={{ color: colors.secondary }}>
+          {t('learn.guideCta')}
+        </p>
+        <a
+          href="/guide"
+          className="inline-flex items-center justify-center min-h-[44px] px-6 rounded-xl text-sm font-semibold"
+          style={{
+            backgroundColor: isDark ? '#fff' : '#0a0a0a',
+            color: isDark ? '#0a0a0a' : '#fff',
+          }}
+        >
+          {t('learn.openGuide')}
+        </a>
+        <p className="text-xs font-bold mt-6 mb-3" style={{ color: colors.muted }}>
+          {t('guidePage.pickRole')}
+        </p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2 text-start">
+          {GUIDE_ROLE_ORDER.map((id) => {
+            const r = guideCopy.roles[id];
+            return (
+              <a
+                key={id}
+                href={`/guide?role=${id}`}
+                className="rounded-xl px-3 py-3 block"
+                style={{
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                  border: isDark ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(0,0,0,0.06)',
+                }}
+              >
+                <span className="block text-sm font-bold" style={{ color: colors.primary }}>
+                  {r.title}
+                </span>
+                <span className="block text-[12px] mt-1" style={{ color: colors.secondary }}>
+                  {r.subtitle}
+                </span>
+              </a>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }

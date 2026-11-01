@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { assertWritableSession } from "@/lib/session-guards";
 import { getPlatformSettings } from "@/lib/platform-settings";
+import { getSmsirAdminSnapshot, SMSIR_TEMPLATE_KINDS } from "@/lib/smsir";
 
 function requireSa(session: { user?: { isSuperAdmin?: boolean } } | null) {
   return Boolean(session?.user?.isSuperAdmin);
@@ -15,16 +16,22 @@ export async function GET() {
   if (!requireSa(session)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const [settings, methods] = await Promise.all([
+  const [settings, methods, smsir] = await Promise.all([
     getPlatformSettings(),
     prisma.paymentMethod.findMany(),
+    getSmsirAdminSnapshot(),
   ]);
+  const { smsirApiKey: _secret, smsirTemplatesJson: _tpl, ...safe } = settings;
   return NextResponse.json({
     data: {
-      settings,
+      settings: {
+        ...safe,
+        smsirApiKey: smsir.apiKeyMasked || null,
+        smsirTemplates: smsir.templates,
+      },
       methods,
       env: {
-        smsirConfigured: Boolean(process.env.SMSIR_API_KEY?.trim()),
+        smsirConfigured: smsir.envConfigured,
         smtpConfigured: Boolean(process.env.SMTP_HOST?.trim()),
         googleConfigured: Boolean(
           process.env.AUTH_GOOGLE_ID?.trim() && process.env.AUTH_GOOGLE_SECRET?.trim(),
@@ -40,6 +47,10 @@ const patchSchema = z.object({
   emailVerifyEnabled: z.boolean().optional(),
   googleAuthEnabled: z.boolean().optional(),
   smsirTemplateId: z.number().int().nullable().optional(),
+  smsirApiKey: z.string().nullable().optional(),
+  smsirTemplates: z
+    .record(z.string(), z.number().int().nullable())
+    .optional(),
   zarinpalMerchantId: z.string().nullable().optional(),
   zarinpalSandbox: z.boolean().optional(),
   notes: z.string().nullable().optional(),
@@ -62,13 +73,28 @@ export async function PATCH(req: Request) {
     c2cEnabled,
     zarinpalEnabled,
     plansCatalogJson,
+    smsirApiKey,
+    smsirTemplates,
     ...rest
   } = parsed.data;
+
+  const templatesJson =
+    smsirTemplates === undefined
+      ? undefined
+      : Object.fromEntries(
+          SMSIR_TEMPLATE_KINDS.map((k) => [k, smsirTemplates[k] ?? null]),
+        );
 
   const settingsPatch: Prisma.PlatformSettingsUpdateInput = {
     ...rest,
     ...(plansCatalogJson !== undefined
       ? { plansCatalogJson: plansCatalogJson as Prisma.InputJsonValue }
+      : {}),
+    ...(smsirApiKey !== undefined && smsirApiKey !== "••••••••"
+      ? { smsirApiKey: smsirApiKey?.trim() || null }
+      : {}),
+    ...(templatesJson !== undefined
+      ? { smsirTemplatesJson: templatesJson as Prisma.InputJsonValue }
       : {}),
   };
 

@@ -475,12 +475,12 @@ function SafeEmailDesktop({ isDark, live }: Props) {
 
   return (
     <div
-      className="flex-1 flex overflow-x-auto lg:overflow-hidden snap-x snap-mandatory h-full"
+      className="flex-1 flex overflow-x-auto lg:overflow-hidden snap-x snap-mandatory h-full min-h-0"
       style={{ scrollbarWidth: 'none', background: canvasBg(isDark) }}
     >
       {/* ─── Inbox Left Folder Sidebar ───────────────────────────────────── */}
       <div
-        className="w-full lg:w-64 shrink-0 border-r flex flex-col p-4 space-y-5 transition-colors snap-start h-full"
+        className="w-full lg:w-64 shrink-0 border-r flex flex-col p-4 space-y-5 transition-colors snap-start h-full min-h-0 overflow-y-auto"
         style={{ borderColor: borderCol, background: panelFill(isDark) }}
       >
         {/* Compose trigger */}
@@ -556,7 +556,7 @@ function SafeEmailDesktop({ isDark, live }: Props) {
       </div>
 
       {/* ─── Right Contents Panel (List + Details Split) ────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
 
         {/* Search header bar */}
         <div
@@ -589,11 +589,11 @@ function SafeEmailDesktop({ isDark, live }: Props) {
         </div>
 
         {/* Split grid */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-5 overflow-hidden">
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-5 overflow-hidden">
 
           {/* Column 1 & 2: Email inbox rows */}
           <div
-            className="lg:col-span-2 border-r flex flex-col overflow-y-auto"
+            className="lg:col-span-2 min-h-0 border-r flex flex-col overflow-y-auto"
             style={{ borderColor: borderCol, scrollbarWidth: 'none' }}
           >
             {filteredEmails.length === 0 ? (
@@ -689,7 +689,7 @@ function SafeEmailDesktop({ isDark, live }: Props) {
           </div>
 
           {/* Column 3, 4 & 5: Email detailed reader */}
-          <div className="lg:col-span-3 flex flex-col overflow-y-auto p-5" style={{ scrollbarWidth: 'none' }}>
+          <div className="lg:col-span-3 min-h-0 flex flex-col overflow-y-auto p-5" style={{ scrollbarWidth: 'none' }}>
             <AnimatePresence mode="wait">
               {!selectedEmail ? (
                 <motion.div

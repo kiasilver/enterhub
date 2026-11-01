@@ -75,6 +75,11 @@ export default function Footer() {
           </h4>
           <ul className="space-y-2 text-sm" style={{ color: muted }}>
             <li>
+              <Link href="/guide" className="hover:underline">
+                {t('footer.guide')}
+              </Link>
+            </li>
+            <li>
               <Link href="/faq" className="hover:underline">
                 {t('footer.faq')}
               </Link>

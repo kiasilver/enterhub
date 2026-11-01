@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission, isWorkspaceMember } from "@/lib/rbac";
 import { AuditLogger } from "@/lib/audit-logger";
 import { assertWritableSession } from "@/lib/session-guards";
+import { publishWorkspaceBranding } from "@/lib/branding-bus";
+import { emitToWorkspaceRoom } from "@/lib/socket-emit";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -28,6 +30,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       logoUrl: true,
       logoUrlDark: true,
       logoColor: true,
+      showCompanyName: true,
       ownerTitle: true,
       departments: true,
       planTier: true,
@@ -105,6 +108,7 @@ const patchSchema = z.object({
     .optional()
     .nullable(),
   ownerTitle: z.string().max(80).optional().nullable(),
+  showCompanyName: z.boolean().optional(),
 });
 
 /** PATCH /api/workspaces/[id]/settings — branding & name */
@@ -125,6 +129,29 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Invalid body", details: parsed.error.flatten() }, { status: 400 });
   }
 
+  const current = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: {
+      logoUrl: true,
+      logoUrlDark: true,
+      showCompanyName: true,
+    },
+  });
+  if (!current) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const nextLogoUrl =
+    parsed.data.logoUrl === undefined ? current.logoUrl : parsed.data.logoUrl;
+  const nextLogoUrlDark =
+    parsed.data.logoUrlDark === undefined ? current.logoUrlDark : parsed.data.logoUrlDark;
+  const hasLogo = Boolean(nextLogoUrl || nextLogoUrlDark);
+  const nextShowCompanyName = hasLogo
+    ? parsed.data.showCompanyName === undefined
+      ? current.showCompanyName
+      : parsed.data.showCompanyName
+    : true;
+
   const updated = await prisma.workspace.update({
     where: { id: workspaceId },
     data: {
@@ -133,6 +160,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       logoUrlDark: parsed.data.logoUrlDark === undefined ? undefined : parsed.data.logoUrlDark,
       logoColor: parsed.data.logoColor === undefined ? undefined : parsed.data.logoColor,
       ownerTitle: parsed.data.ownerTitle === undefined ? undefined : parsed.data.ownerTitle,
+      showCompanyName: nextShowCompanyName,
     },
     select: {
       id: true,
@@ -141,7 +169,28 @@ export async function PATCH(req: Request, ctx: Ctx) {
       logoUrlDark: true,
       logoColor: true,
       ownerTitle: true,
+      showCompanyName: true,
     },
+  });
+
+  publishWorkspaceBranding({
+    workspaceId,
+    branding: {
+      id: updated.id,
+      name: updated.name,
+      logoUrl: updated.logoUrl,
+      logoUrlDark: updated.logoUrlDark,
+      logoColor: updated.logoColor,
+      showCompanyName: updated.showCompanyName,
+    },
+  });
+  emitToWorkspaceRoom(workspaceId, "workspace:branding", {
+    id: updated.id,
+    name: updated.name,
+    logoUrl: updated.logoUrl,
+    logoUrlDark: updated.logoUrlDark,
+    logoColor: updated.logoColor,
+    showCompanyName: updated.showCompanyName,
   });
 
   await AuditLogger.fromRequest(req, {

@@ -7,6 +7,7 @@ import { useBoardStore } from "@/stores/useBoardStore";
 type CardUpdatedPayload = {
   type?: string;
   boardId?: string;
+  cardId?: string;
   cards?: Array<{ id: string; listId: string; order: number }>;
 };
 
@@ -47,8 +48,12 @@ export function useSocket(boardId: string | null | undefined) {
     };
 
     const onCardUpdated = (payload: CardUpdatedPayload) => {
-      if (!payload?.cards?.length) return;
       if (payload.boardId && payload.boardId !== boardId) return;
+      if (payload?.type === "card.deleted" && payload.cardId) {
+        useBoardStore.getState().removeCard(payload.cardId);
+        return;
+      }
+      if (!payload?.cards?.length) return;
       // Avoid fighting local optimistic sync mid-drag
       if (useBoardStore.getState().isSyncing) return;
       useBoardStore.getState().applyRemoteCards(payload.cards);

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Roboto_Flex, Inter } from "next/font/google";
+import localFont from "next/font/local";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { cookies } from "next/headers";
 import "./fonts-iran-yekan.css";
 import "./globals.css";
@@ -17,26 +19,22 @@ import {
   type CalendarSystem,
 } from "@/lib/app-date";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+/** Self-host fonts — Google Fonts fetch is blocked on this host. */
+const geistSans = GeistSans;
+const geistMono = GeistMono;
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-const robotoFlex = Roboto_Flex({
-  variable: "--font-roboto-flex",
-  subsets: ["latin"],
-  axes: ["opsz", "wdth"],
-});
-
-const inter = Inter({
+const inter = localFont({
+  src: "../fonts/inter-variable.woff2",
   variable: "--font-inter",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
+  weight: "100 900",
+});
+
+const robotoFlex = localFont({
+  src: "../fonts/inter-variable.woff2",
+  variable: "--font-roboto-flex",
+  display: "swap",
+  weight: "100 900",
 });
 
 export const metadata: Metadata = {

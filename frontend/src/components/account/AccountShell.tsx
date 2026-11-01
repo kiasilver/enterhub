@@ -11,6 +11,7 @@ import {
 } from '@/components/SafeDashboard/theme';
 import { PRESENCE_META, type PresenceStatus } from '@/lib/presence';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { AccountAvatar } from '@/components/account/AccountAvatar';
 
 export const accountContainer: Variants = {
   hidden: { opacity: 0 },
@@ -21,7 +22,7 @@ export const accountFadeUp: Variants = {
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 220, damping: 28 } },
 };
 
-export type AccountTab = 'profile' | 'settings' | 'help';
+export type AccountTab = 'profile' | 'settings' | 'notifications' | 'help';
 
 export function AccountShell({
   isDark,
@@ -32,6 +33,7 @@ export function AccountShell({
   subtitle,
   avatarUrl,
   presenceStatus = 'available',
+  onAvatarChange,
   children,
 }: {
   isDark: boolean;
@@ -42,6 +44,7 @@ export function AccountShell({
   subtitle?: string;
   avatarUrl?: string | null;
   presenceStatus?: PresenceStatus | 'offline';
+  onAvatarChange?: (url: string | null) => void;
   children: React.ReactNode;
 }) {
   const { t } = useLang();
@@ -53,6 +56,7 @@ export function AccountShell({
   const tabs: { id: AccountTab; label: string }[] = [
     { id: 'profile', label: t('account.profile') },
     { id: 'settings', label: t('account.settingsTab') },
+    { id: 'notifications', label: t('account.notificationsTab') },
     { id: 'help', label: t('account.helpTab') },
   ];
   const initials = displayName
@@ -89,30 +93,13 @@ export function AccountShell({
             }}
           />
           <div className="relative px-4 sm:px-6 pt-6 pb-5 flex flex-col sm:flex-row sm:items-center gap-5">
-            <div
-              className="w-[72px] h-[72px] rounded-2xl overflow-hidden flex-shrink-0 flex items-center justify-center text-lg font-bold text-white relative"
-              style={{
-                border: `1px solid ${border}`,
-                background: avatarUrl ? undefined : primaryColor,
-                boxShadow: isDark
-                  ? '0 8px 24px rgba(0,0,0,0.4)'
-                  : '0 8px 24px rgba(0,0,0,0.1)',
-              }}
-            >
-              {avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
-              ) : (
-                initials || '?'
-              )}
-              <span
-                className="absolute bottom-1.5 right-1.5 w-3 h-3 rounded-full border-2"
-                style={{
-                  background: dot,
-                  borderColor: isDark ? 'var(--background)' : '#fff',
-                }}
-              />
-            </div>
+            <AccountAvatar
+              isDark={isDark}
+              avatarUrl={avatarUrl}
+              initials={initials || '?'}
+              presenceColor={dot}
+              onChanged={(url) => onAvatarChange?.(url)}
+            />
             <div className="flex-1 min-w-0">
               <h2
                 className="text-xl font-bold truncate"

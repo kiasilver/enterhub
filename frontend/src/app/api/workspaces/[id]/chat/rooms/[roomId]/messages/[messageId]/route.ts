@@ -57,7 +57,8 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   });
   if (updated) {
     const payload = serializeChatMessage(updated, session.user.id);
-    emitToChatRoom(roomId, "chat:message", { ...payload, roomId, softDeleted: true });
+    const { isMine: _isMine, ...broadcast } = payload;
+    emitToChatRoom(roomId, "chat:message", { ...broadcast, roomId, softDeleted: true });
   }
 
   return NextResponse.json({ data: { ok: true } });

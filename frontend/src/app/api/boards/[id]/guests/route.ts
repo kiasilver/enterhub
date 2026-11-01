@@ -3,16 +3,21 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/rbac";
 import { AuditLogger } from "@/lib/audit-logger";
+import { canManageBoardGuests } from "@/lib/board-access";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const inviteGuestSchema = z.object({
-  email: z.string().email(),
-  name: z.string().max(120).optional(),
-  accessLevel: z.enum(["READ_ONLY", "COMMENT_ONLY", "ASSIGNED_ONLY"]).default("READ_ONLY"),
-});
+const inviteGuestSchema = z
+  .object({
+    email: z.string().email().optional(),
+    userId: z.string().min(1).optional(),
+    name: z.string().max(120).optional(),
+    accessLevel: z.enum(["READ_ONLY", "COMMENT_ONLY", "ASSIGNED_ONLY"]).default("READ_ONLY"),
+  })
+  .refine((d) => !!d.email || !!d.userId, {
+    message: "email or userId required",
+  });
 
 /** GET /api/boards/[id]/guests */
 export async function GET(_req: Request, context: Ctx) {
@@ -30,8 +35,8 @@ export async function GET(_req: Request, context: Ctx) {
     return NextResponse.json({ error: "Board not found" }, { status: 404 });
   }
 
-  if (!(await hasPermission(session.user.id, board.workspaceId, "board:invite_guest"))) {
-    return NextResponse.json({ error: "Forbidden: board:invite_guest" }, { status: 403 });
+  if (!(await canManageBoardGuests(session.user.id, boardId))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const guests = await prisma.boardGuest.findMany({
@@ -65,8 +70,8 @@ export async function POST(req: Request, context: Ctx) {
     return NextResponse.json({ error: "Forbidden: read-only impersonation" }, { status: 403 });
   }
 
-  if (!(await hasPermission(session.user.id, board.workspaceId, "board:invite_guest"))) {
-    return NextResponse.json({ error: "Forbidden: board:invite_guest" }, { status: 403 });
+  if (!(await canManageBoardGuests(session.user.id, boardId))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   let body: unknown;
@@ -84,16 +89,37 @@ export async function POST(req: Request, context: Ctx) {
     );
   }
 
-  const email = parsed.data.email.toLowerCase();
-  let user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        email,
-        name: parsed.data.name ?? email.split("@")[0],
-        passwordHash: await bcrypt.hash(`guest-${Date.now()}`, 10),
+  let user: { id: string; email: string | null; name: string | null };
+  if (parsed.data.userId) {
+    const member = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId: board.workspaceId,
+        userId: parsed.data.userId,
+        status: "ACTIVE",
       },
+      include: { user: { select: { id: true, email: true, name: true } } },
     });
+    if (!member) {
+      return NextResponse.json(
+        { error: "Observer is not an active workspace member" },
+        { status: 400 },
+      );
+    }
+    user = member.user;
+  } else {
+    const email = parsed.data.email!.toLowerCase();
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      user = existing;
+    } else {
+      user = await prisma.user.create({
+        data: {
+          email,
+          name: parsed.data.name ?? email.split("@")[0],
+          passwordHash: await bcrypt.hash(`guest-${Date.now()}`, 10),
+        },
+      });
+    }
   }
 
   // Guests should not already be full ACTIVE workspace members with org visibility confusion —
@@ -116,7 +142,11 @@ export async function POST(req: Request, context: Ctx) {
     workspaceId: board.workspaceId,
     boardId,
     action: "board.guest.invite",
-    metadata: { email, accessLevel: parsed.data.accessLevel },
+    metadata: {
+      email: user.email,
+      userId: user.id,
+      accessLevel: parsed.data.accessLevel,
+    },
     severity: "info",
   });
 

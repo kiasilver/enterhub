@@ -7,7 +7,7 @@ export type DeptMember = {
 export type DeptPerson = {
   id: string;
   name: string | null;
-  email: string;
+  email: string | null;
   avatarUrl: string | null;
 };
 
@@ -24,13 +24,14 @@ export type DeptRichCard = {
   listId: string;
   listTitle: string;
   assignees: DeptPerson[];
+  supervisor?: DeptPerson | null;
   createdBy?: DeptPerson | null;
   labels: { id: string; name: string; color: string }[];
   checklist: {
     done: number;
     total: number;
     progressPct: number;
-    items: { id: string; title: string; isDone: boolean }[];
+    items: { id: string; title: string; isDone: boolean; description?: string | null }[];
   };
   commentCount?: number;
   attachmentCount?: number;
@@ -39,11 +40,17 @@ export type DeptRichCard = {
 export type DeptProject = {
   id: string;
   name: string;
+  isGeneral?: boolean;
   coverColor: string;
+  icon?: string | null;
+  color?: string | null;
+  description?: string | null;
+  visibility?: string;
   completionPct: number;
   cardCount: number;
   doneCount?: number;
   cards: DeptRichCard[];
+  canDelete?: boolean;
 };
 
 export type DeptData = {

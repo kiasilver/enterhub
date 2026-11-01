@@ -1,13 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
 import { Filter, Plus, Star } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
 import GlassButton from '@/components/SafeDashboard/GlassButton';
 import { CardDetailsModal } from '@/components/board/CardDetailsModal';
-import { WorkTimerBadge } from '@/components/ui/WorkTimerBadge';
+import { CreateTaskModal } from '@/components/board/CreateTaskModal';
+import { RichTaskCard, type RichTaskCardData } from '@/components/board/RichTaskCard';
 import {
   textPrimary,
   textSecondary,
@@ -19,25 +21,31 @@ import {
 import { useBoardStore } from '@/stores/useBoardStore';
 import { useSocket } from '@/hooks/useSocket';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { localizedDepartmentLabel } from '@/lib/department-i18n';
 import { localizeListTitle } from '@/lib/list-i18n';
 import type { GuestAccessLevel } from '@prisma/client';
+import type { DeptPerson } from '@/components/departments/department-types';
 
 const STARRED_KEY = 'enterhub-starred-boards';
 
-type CardMeta = {
+type CardMeta = RichTaskCardData & {
   assigneeIds: string[];
-  dueDate: string | null;
-  priority?: string;
-  checklistDone?: number;
-  checklistTotal?: number;
-  labels?: { id: string; name: string; color: string }[];
-  workflowStatus?: string;
-  startedAt?: string | null;
+};
+
+type BoardPerson = {
+  id: string;
+  name: string | null;
+  email?: string | null;
+  avatarUrl?: string | null;
 };
 
 type Props = {
   boardId: string;
   workspaceId: string;
+  boardName?: string;
+  visibility?: 'PRIVATE' | 'WORKSPACE' | 'PUBLIC' | string;
+  department?: { id: string; key: string; name: string } | null;
+  from?: string | null;
   readOnly?: boolean;
   guestLevel?: GuestAccessLevel | string;
 };
@@ -70,7 +78,26 @@ function readStarred(): string[] {
   }
 }
 
-export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Props) {
+function asPerson(p?: BoardPerson | null): DeptPerson | null {
+  if (!p) return null;
+  return {
+    id: p.id,
+    name: p.name,
+    email: p.email || '',
+    avatarUrl: p.avatarUrl ?? null,
+  };
+}
+
+export function BoardKanban({
+  boardId,
+  workspaceId,
+  boardName,
+  visibility,
+  department,
+  from,
+  readOnly,
+  guestLevel,
+}: Props) {
   const { theme } = useTheme();
   const { t } = useLang();
   const isDark = theme === 'dark';
@@ -78,13 +105,13 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
   const userId = session?.user?.id;
 
   const [error, setError] = useState<string | null>(null);
-  const [newTitles, setNewTitles] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [myCardsOnly, setMyCardsOnly] = useState(false);
   const [dueThisWeek, setDueThisWeek] = useState(false);
   const [starred, setStarred] = useState(false);
   const [cardMeta, setCardMeta] = useState<Record<string, CardMeta>>({});
   const [openCardId, setOpenCardId] = useState<string | null>(null);
+  const [createListId, setCreateListId] = useState<string | null>(null);
 
   const hydrate = useBoardStore((s) => s.hydrate);
   const setBoardContext = useBoardStore((s) => s.setBoardContext);
@@ -99,8 +126,8 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
     setStarred(readStarred().includes(boardId));
   }, [boardId]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/boards/${boardId}/cards`);
@@ -113,7 +140,7 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
           title: l.title,
           order: l.order,
           cardIds: l.cardIds,
-        })
+        }),
       );
       const cards = (json.data.cards || []).map(
         (c: {
@@ -121,24 +148,28 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
           listId: string;
           title: string;
           order: number;
-          dueDate?: string | null;
-          assignees?: Array<{ userId: string }>;
         }) => ({
           id: c.id,
           listId: c.listId,
           title: c.title,
           order: c.order,
-        })
+        }),
       );
       const meta: Record<string, CardMeta> = {};
       for (const c of json.data.cards || []) {
-        const items = c.checklistItems || [];
+        const assigneeRows = (c.assignees || []) as Array<{
+          userId?: string;
+          user?: BoardPerson;
+        }>;
+        const assignees = assigneeRows
+          .map((a) => asPerson(a.user || (a.userId ? { id: a.userId, name: null } : null)))
+          .filter((p): p is DeptPerson => Boolean(p));
         meta[c.id] = {
-          assigneeIds: (c.assignees || []).map((a: { userId: string }) => a.userId),
+          id: c.id,
+          title: c.title,
+          description: c.description ?? null,
           dueDate: c.dueDate ?? null,
           priority: c.priority,
-          checklistDone: items.filter((i: { isDone: boolean }) => i.isDone).length,
-          checklistTotal: items.length,
           workflowStatus: c.workflowStatus,
           startedAt: c.startedAt ?? null,
           labels: (c.labels || [])
@@ -147,6 +178,27 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
                 row.label,
             )
             .filter(Boolean) as { id: string; name: string; color: string }[],
+          assignees,
+          supervisor: asPerson(c.supervisor),
+          createdBy: asPerson(c.createdBy),
+          checklistItems: (c.checklistItems || []).map(
+            (i: {
+              id: string;
+              title: string;
+              isDone: boolean;
+              description?: string | null;
+            }) => ({
+              id: i.id,
+              title: i.title,
+              isDone: i.isDone,
+              description: i.description ?? null,
+            }),
+          ),
+          commentCount: c._count?.comments ?? c.comments?.length ?? 0,
+          attachmentCount: c._count?.attachments ?? c.attachments?.length ?? 0,
+          assigneeIds: assigneeRows
+            .map((a) => a.userId || a.user?.id)
+            .filter((id): id is string => Boolean(id)),
         };
       }
       setCardMeta(meta);
@@ -154,7 +206,7 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, [boardId, workspaceId, hydrate, setBoardContext]);
 
@@ -192,37 +244,70 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
     await onDragEnd(result);
   }
 
-  async function addCard(listId: string) {
-    if (readOnly) return;
-    const title = (newTitles[listId] || '').trim();
-    if (!title) return;
-    const res = await fetch(`/api/boards/${boardId}/cards`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ listId, title }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error || 'Create failed');
-      return;
-    }
-    setNewTitles((t) => ({ ...t, [listId]: '' }));
-    await load();
-  }
-
   const filterActive = myCardsOnly || dueThisWeek;
+  const deptSlug = department?.id || 'general';
+  const boardsHome = `/workspace/${workspaceId}/boards?view=list&mode=kanban`;
+  const sectionHref = `/workspace/${workspaceId}/departments/${deptSlug}?from=${encodeURIComponent(from || boardsHome)}`;
+  const sectionLabel = localizedDepartmentLabel(
+    t,
+    department?.key ?? 'general',
+    department?.name,
+  );
+  const visibilityLabel =
+    visibility === 'PRIVATE'
+      ? t('projectsPage.accessPrivate')
+      : visibility === 'PUBLIC'
+        ? t('board.visibilityShare')
+        : t('projectsPage.accessPublic');
 
-  if (loading) {
+  if (loading && lists.length === 0) {
     return <p style={{ color: textMuted(isDark) }}>{t('board.loadingBoard')}</p>;
   }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm" style={{ color: textSecondary(isDark) }}>
-          {t('board.dragHint')} {isSyncing ? `· ${t('board.syncing')}` : ''}
-          {readOnly ? ` · ${t('board.readOnlySuffix')}` : ''}
-        </p>
+        <div className="min-w-0 space-y-1">
+          <nav
+            className="flex flex-wrap items-center gap-1.5 text-sm font-semibold"
+            style={{ color: textPrimary(isDark) }}
+            aria-label={t('projectsPage.sectionBreadcrumb')}
+          >
+            <Link
+              href={sectionHref}
+              className="hover:underline underline-offset-2"
+              style={{ color: textSecondary(isDark) }}
+            >
+              {sectionLabel}
+            </Link>
+            <span style={{ color: textMuted(isDark) }} aria-hidden>
+              →
+            </span>
+            <span className="truncate">{boardName || t('board.kanban')}</span>
+            {visibility && (
+              <span
+                className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                style={{
+                  background:
+                    visibility === 'PRIVATE'
+                      ? isDark
+                        ? 'rgba(245,158,11,0.2)'
+                        : 'rgba(245,158,11,0.14)'
+                      : isDark
+                        ? 'rgba(20,184,166,0.2)'
+                        : 'rgba(20,184,166,0.12)',
+                  color: visibility === 'PRIVATE' ? '#f59e0b' : '#14b8a6',
+                }}
+              >
+                {visibilityLabel}
+              </span>
+            )}
+          </nav>
+          <p className="text-sm" style={{ color: textSecondary(isDark) }}>
+            {t('board.dragHint')} {isSyncing ? `· ${t('board.syncing')}` : ''}
+            {readOnly ? ` · ${t('board.readOnlySuffix')}` : ''}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <GlassButton
             type="button"
@@ -277,18 +362,18 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
             return (
               <div
                 key={list.id}
-                className="w-[min(18rem,calc(100vw-3rem))] sm:w-72 flex-shrink-0 rounded-2xl p-3"
+                className="w-[min(20rem,calc(100vw-3rem))] sm:w-80 flex-shrink-0 rounded-2xl p-3"
                 style={{
                   ...glassStyle(isDark),
                   borderRadius: 16,
                 }}
               >
                 <h3
-                  className="font-semibold text-sm mb-3 px-1"
+                  className="font-semibold text-sm mb-3 px-1 flex items-center justify-between gap-2"
                   style={{ color: textPrimary(isDark) }}
                 >
-                  {localizeListTitle(list.title, t)}
-                  <span className="ms-2 text-xs font-normal" style={{ color: textMuted(isDark) }}>
+                  <span className="min-w-0 truncate">{localizeListTitle(list.title, t)}</span>
+                  <span className="text-xs font-normal tabular-nums shrink-0" style={{ color: textMuted(isDark) }}>
                     {visibleIds.length}
                     {filterActive && visibleIds.length !== list.cardIds.length
                       ? ` / ${list.cardIds.length}`
@@ -306,6 +391,7 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
                       {(filterActive ? visibleIds : list.cardIds).map((cid, index) => {
                         const card = cardsById[cid];
                         if (!card) return null;
+                        const rich = cardMeta[cid];
                         return (
                           <Draggable
                             key={cid}
@@ -318,114 +404,20 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
                                 ref={drag.innerRef}
                                 {...drag.draggableProps}
                                 {...drag.dragHandleProps}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => setOpenCardId(cid)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    setOpenCardId(cid);
-                                  }
-                                }}
-                                className="p-3 rounded-xl text-sm shadow-sm cursor-pointer space-y-2"
-                                style={{
-                                  ...drag.draggableProps.style,
-                                  background: surfaceItem(isDark),
-                                  border: `1px solid ${borderSubtle(isDark)}`,
-                                  color: textPrimary(isDark),
-                                }}
+                                style={drag.draggableProps.style}
                               >
-                                <p className="font-medium leading-snug">{card.title}</p>
-                                {(() => {
-                                  const m = cardMeta[cid];
-                                  if (!m) return null;
-                                  const pct =
-                                    m.checklistTotal && m.checklistTotal > 0
-                                      ? Math.round(
-                                          ((m.checklistDone || 0) / m.checklistTotal) * 100,
-                                        )
-                                      : 0;
-                                  return (
-                                    <>
-                                      {m.labels && m.labels.length > 0 && (
-                                        <div className="flex flex-wrap gap-1">
-                                          {m.labels.slice(0, 3).map((l) => (
-                                            <span
-                                              key={l.id}
-                                              className="text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white"
-                                              style={{ background: l.color }}
-                                            >
-                                              {l.name}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      )}
-                                      {m.checklistTotal != null && m.checklistTotal > 0 && (
-                                        <div>
-                                          <div
-                                            className="flex justify-between text-[10px] mb-0.5"
-                                            style={{ color: textMuted(isDark) }}
-                                          >
-                                            <span>
-                                              {m.checklistDone}/{m.checklistTotal}
-                                            </span>
-                                            <span>{pct}%</span>
-                                          </div>
-                                          <div
-                                            className="h-1 rounded-full overflow-hidden"
-                                            style={{
-                                              background: isDark
-                                                ? 'rgba(255,255,255,0.1)'
-                                                : 'rgba(0,0,0,0.08)',
-                                            }}
-                                          >
-                                            <div
-                                              className="h-full rounded-full"
-                                              style={{
-                                                width: `${pct}%`,
-                                                background: '#14b8a6',
-                                              }}
-                                            />
-                                          </div>
-                                        </div>
-                                      )}
-                                      {m.dueDate && (
-                                        <p
-                                          className="text-[10px] font-semibold inline-flex items-center gap-1.5"
-                                          style={{
-                                            color:
-                                              m.workflowStatus !== 'APPROVED' &&
-                                              new Date(m.dueDate).getTime() < Date.now()
-                                                ? '#f87171'
-                                                : textSecondary(isDark),
-                                          }}
-                                        >
-                                          {new Date(m.dueDate).toLocaleDateString(undefined, {
-                                            month: 'short',
-                                            day: 'numeric',
-                                          })}
-                                          {m.workflowStatus !== 'APPROVED' &&
-                                            new Date(m.dueDate).getTime() < Date.now() && (
-                                              <span
-                                                className="font-bold px-1 py-0.5 rounded"
-                                                style={{
-                                                  background: 'rgba(239,68,68,0.15)',
-                                                  border: '1px solid rgba(239,68,68,0.35)',
-                                                }}
-                                              >
-                                                Delayed
-                                              </span>
-                                            )}
-                                        </p>
-                                      )}
-                                      <WorkTimerBadge
-                                        startedAt={m.startedAt}
-                                        workflowStatus={m.workflowStatus}
-                                        size="sm"
-                                      />
-                                    </>
-                                  );
-                                })()}
+                                <RichTaskCard
+                                  card={{
+                                    ...(rich || { id: card.id, title: card.title }),
+                                    title: card.title,
+                                    listTitle: undefined,
+                                  }}
+                                  cardBg={surfaceItem(isDark)}
+                                  isDark={isDark}
+                                  workspaceId={workspaceId}
+                                  departmentId={department?.id}
+                                  onOpen={() => setOpenCardId(cid)}
+                                />
                               </div>
                             )}
                           </Draggable>
@@ -437,31 +429,19 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
                 </Droppable>
 
                 {!readOnly && (
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      value={newTitles[list.id] || ''}
-                      onChange={(e) =>
-                        setNewTitles((t) => ({ ...t, [list.id]: e.target.value }))
-                      }
-                      placeholder={t('board.addCardPlaceholder')}
-                      className="flex-1 px-2 py-1.5 rounded-lg text-sm outline-none"
-                      style={{
-                        border: `1px solid ${borderSubtle(isDark)}`,
-                        background: isDark ? 'var(--surface)' : 'rgba(255,255,255,0.9)',
-                        color: textPrimary(isDark),
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void addCard(list.id);
-                      }}
-                    />
-                    <GlassButton
-                      type="button"
-                      className="p-2 rounded-lg"
-                      onClick={() => void addCard(list.id)}
-                    >
-                      <Plus size={14} />
-                    </GlassButton>
-                  </div>
+                  <button
+                    type="button"
+                    className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
+                    style={{
+                      border: `1px dashed ${borderSubtle(isDark)}`,
+                      color: textSecondary(isDark),
+                      background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.55)',
+                    }}
+                    onClick={() => setCreateListId(list.id)}
+                  >
+                    <Plus size={14} />
+                    {t('board.newTask')}
+                  </button>
                 )}
               </div>
             );
@@ -474,21 +454,32 @@ export function BoardKanban({ boardId, workspaceId, readOnly, guestLevel }: Prop
           boardId={boardId}
           cardId={openCardId}
           open={Boolean(openCardId)}
-          onClose={() => {
-            setOpenCardId(null);
-            void load();
-          }}
+          onClose={() => setOpenCardId(null)}
           onChanged={() => {
-            void load();
+            void load({ silent: true });
           }}
           onDeleted={() => {
+            if (openCardId) useBoardStore.getState().removeCard(openCardId);
             setOpenCardId(null);
-            void load();
           }}
           readOnly={readOnly}
           isGuest={Boolean(guestLevel)}
         />
       )}
+
+      <CreateTaskModal
+        workspaceId={workspaceId}
+        isDark={isDark}
+        open={Boolean(createListId)}
+        initialBoardId={boardId}
+        initialListId={createListId}
+        lockBoard
+        onClose={() => setCreateListId(null)}
+        onCreated={async () => {
+          setCreateListId(null);
+          await load({ silent: true });
+        }}
+      />
     </div>
   );
 }

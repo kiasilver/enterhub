@@ -156,7 +156,7 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
 
   return (
     <header
-      className="w-full rounded-[22px] p-5 sm:p-6 relative overflow-hidden"
+      className="w-full min-w-0 rounded-[22px] p-5 sm:p-6 relative overflow-visible"
       style={{
         ...glass,
         boxShadow: isDark ? '0 12px 40px rgba(0,0,0,0.4)' : '0 12px 36px rgba(15,23,42,0.08)',
@@ -177,7 +177,7 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
         }}
       />
 
-      <div className="relative">
+      <div className="relative min-w-0 w-full">
         <p
           className="text-[11px] font-bold uppercase tracking-[0.16em] mb-2"
           style={{ color: primaryColor }}
@@ -188,12 +188,11 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
           {t('workspace.settings')}
         </h1>
         <p className="text-sm mt-1.5 max-w-xl" style={{ color: textSecondary(isDark) }}>
-          Branding, team, gallery, security, and flexible cloud billing — all in one place.
+          {t('settingsNav.subtitle')}
         </p>
 
         <nav
-          className="mt-5 flex gap-2 overflow-x-auto pb-1"
-          style={{ scrollbarWidth: 'none' }}
+          className="mt-5 flex gap-2 overflow-x-auto overscroll-x-contain pb-2 min-w-0 w-full max-w-full"
         >
           {tabs.map((tab) => {
             const isActive = active(tab.id);
@@ -224,7 +223,7 @@ export function WorkspaceSettingsNav({ workspaceId }: { workspaceId: string }) {
                     {t(tab.labelKey)}
                   </span>
                 </div>
-                <p className="text-[10px] pl-4" style={{ color: textMuted(isDark) }}>
+                <p className="text-[10px] ps-4" style={{ color: textMuted(isDark) }}>
                   {t(tab.hintKey)}
                 </p>
               </Link>

@@ -27,7 +27,7 @@ export default function SignUp() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [hasCompany, setHasCompany] = useState(true);
+  const [hasCompany, setHasCompany] = useState(false);
   const [smsOtp, setSmsOtp] = useState('');
   const [emailOtp, setEmailOtp] = useState('');
   const [smsSent, setSmsSent] = useState(false);
@@ -155,7 +155,7 @@ export default function SignUp() {
       } else {
         const me = await fetch('/api/auth/me');
         const meJson = await readJson<{ data?: { home?: { homePath?: string } } }>(me);
-        router.push(meJson.data?.data?.home?.homePath || '/onboarding/company');
+        router.push(meJson.data?.data?.home?.homePath || '/home');
       }
       router.refresh();
     } catch (err) {
@@ -203,7 +203,13 @@ export default function SignUp() {
           {policy?.googleEnabled && (
             <button
               type="button"
-              onClick={() => signIn('google', { callbackUrl: hasCompany ? '/onboarding/company' : '/api/auth/me' })}
+              onClick={() =>
+                signIn('google', {
+                  callbackUrl: hasCompany
+                    ? '/onboarding/company'
+                    : '/api/auth/callback-home',
+                })
+              }
               className="w-full mb-4 py-3 rounded-2xl text-sm font-semibold"
               style={{
                 border: isDark ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(0,0,0,0.15)',

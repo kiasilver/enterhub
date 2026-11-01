@@ -8,8 +8,62 @@
 
 const { createServer } = require("http");
 const { parse } = require("url");
+const fs = require("fs");
+const path = require("path");
 const next = require("next");
 const { Server } = require("socket.io");
+
+const UPLOAD_ROOT = path.resolve(process.cwd(), "public", "uploads");
+const UPLOAD_TYPES = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/** Runtime files in public/uploads are not in the Next build manifest — serve them from disk. */
+function serveRuntimeUpload(req, res, pathname) {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  if (!pathname || !pathname.startsWith("/uploads/")) return false;
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname.slice("/uploads/".length));
+  } catch {
+    res.statusCode = 400;
+    res.end();
+    return true;
+  }
+  if (!rel || rel.includes("\0") || path.isAbsolute(rel) || path.normalize(rel).startsWith("..")) {
+    res.statusCode = 400;
+    res.end();
+    return true;
+  }
+  const file = path.resolve(UPLOAD_ROOT, rel);
+  if (file !== UPLOAD_ROOT && !file.startsWith(UPLOAD_ROOT + path.sep)) {
+    res.statusCode = 404;
+    res.end();
+    return true;
+  }
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!st.isFile()) return false;
+  res.statusCode = 200;
+  res.setHeader("Content-Type", UPLOAD_TYPES[path.extname(file).toLowerCase()] || "application/octet-stream");
+  res.setHeader("Content-Length", String(st.size));
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (req.method === "HEAD") {
+    res.end();
+    return true;
+  }
+  fs.createReadStream(file).pipe(res);
+  return true;
+}
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
@@ -21,6 +75,7 @@ const handle = app.getRequestHandler();
 app.prepare().then(() => {
   const httpServer = createServer((req, res) => {
     const parsedUrl = parse(req.url, true);
+    if (serveRuntimeUpload(req, res, parsedUrl.pathname)) return;
     handle(req, res, parsedUrl);
   });
 
@@ -102,10 +157,74 @@ app.prepare().then(() => {
     });
 
     // ─── HD Meetings (WebRTC signaling) ─────────────────────────────
+    socket.on("meeting:invite", (payload = {}) => {
+      const workspaceId = payload.workspaceId;
+      const meetingId = payload.meetingId;
+      const from = payload.from || {};
+      const toUserIds = Array.isArray(payload.toUserIds)
+        ? payload.toUserIds.filter((id) => typeof id === "string" && id)
+        : payload.toUserId && typeof payload.toUserId === "string"
+          ? [payload.toUserId]
+          : [];
+      if (
+        !workspaceId ||
+        !meetingId ||
+        !toUserIds.length ||
+        typeof workspaceId !== "string" ||
+        typeof meetingId !== "string"
+      ) {
+        return;
+      }
+      io.to(`room:ws_${workspaceId}`).emit("meeting:invite", {
+        meetingId,
+        toUserId: toUserIds.length === 1 ? toUserIds[0] : undefined,
+        toUserIds,
+        kind: payload.kind === "group" || meetingId.startsWith("grp_") ? "group" : "p2p",
+        title: typeof payload.title === "string" ? payload.title : null,
+        roomId: typeof payload.roomId === "string" ? payload.roomId : null,
+        from: {
+          id: from.id || socket.data?.presence?.userId || null,
+          name: from.name || "Someone",
+          avatarUrl: from.avatarUrl || null,
+        },
+      });
+    });
+
+    socket.on("meeting:invite-cancel", (payload = {}) => {
+      const workspaceId = payload.workspaceId;
+      const meetingId = payload.meetingId;
+      if (!workspaceId || !meetingId) return;
+      io.to(`room:ws_${workspaceId}`).emit("meeting:invite-cancel", {
+        meetingId,
+        toUserId: payload.toUserId || null,
+      });
+    });
+
+    socket.on("meeting:invite-decline", (payload = {}) => {
+      const workspaceId = payload.workspaceId;
+      const meetingId = payload.meetingId;
+      if (!workspaceId || !meetingId) return;
+      io.to(`room:ws_${workspaceId}`).emit("meeting:invite-decline", {
+        meetingId,
+        fromUserId: payload.fromUserId || socket.data?.presence?.userId || null,
+      });
+    });
+
     socket.on("meeting:join", (payload = {}) => {
       const meetingId = payload.meetingId;
       const user = payload.user;
       if (!meetingId || typeof meetingId !== "string") return;
+      let occupants = 0;
+      for (const [, s] of io.of("/").sockets) {
+        if (s.id !== socket.id && s.data?.meeting?.meetingId === meetingId) {
+          occupants += 1;
+        }
+      }
+      const cap = meetingId.startsWith("grp_") ? 12 : 2;
+      if (occupants >= cap) {
+        socket.emit("meeting:full", { meetingId });
+        return;
+      }
       const room = `room:meeting_${meetingId}`;
       socket.join(room);
       socket.data.meeting = {

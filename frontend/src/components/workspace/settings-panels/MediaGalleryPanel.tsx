@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import {
   SettingsGlassCard,
   SettingsSectionTitle,
@@ -43,6 +44,7 @@ export default function MediaGalleryPanel() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -204,13 +206,13 @@ export default function MediaGalleryPanel() {
     <div className="w-full space-y-5">
       <SettingsGlassCard accent="#ec4899">
         <SettingsSectionTitle
-          title="Workspace gallery"
+          title={t('settingsUi.galleryTitle')}
           subtitle={
             scope === 'workspace'
-              ? 'Manager view (access matrix): every file shared in chat, boards, and uploads.'
-              : 'You only see files you uploaded. Ask an admin for full gallery access.'
+              ? t('settingsUi.galleryFull')
+              : t('settingsUi.galleryMine')
           }
-          badge={scope === 'workspace' ? 'Full access' : 'My files'}
+          badge={scope === 'workspace' ? t('settingsUi.galleryFullBadge') : t('settingsUi.galleryMineBadge')}
           badgeColor="#ec4899"
         />
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 import {
   DragDropContext,
   Droppable,
@@ -13,9 +13,9 @@ import {
   MdAttachFile,
   MdChatBubbleOutline,
   MdCheckCircle,
+  MdEdit,
   MdErrorOutline,
   MdFlag,
-  MdMoreHoriz,
   MdRadioButtonUnchecked,
   MdTimelapse,
 } from 'react-icons/md';
@@ -30,8 +30,17 @@ import {
 import type { MyTaskItem } from '@/components/dashboards/MyTasksViews';
 import { isChecklistBookend } from '@/lib/checklist-defaults';
 import { localizeChecklistTitle, localizePriorityShort } from '@/lib/list-i18n';
+import { TaskPlaceChips } from '@/components/dashboards/TaskPlaceChips';
 import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { MyTasksEndOfTask } from '@/components/dashboards/MyTasksEndOfTask';
+import {
+  finishBlockReason,
+  applyColumnMove,
+  finishDestination,
+  relocateTaskToColumn,
+  taskLooksCompleted,
+} from '@/components/dashboards/my-tasks-finish';
 
 export type KanbanColumnId = 'todo' | 'progress' | 'review' | 'done';
 
@@ -119,7 +128,7 @@ export function MyTasksKanban({
   const [local, setLocal] = useState<ColumnsState | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reviewFlashId, setReviewFlashId] = useState<string | null>(null);
+  const [completeFlashId, setCompleteFlashId] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
 
   const board = local ?? columns;
@@ -134,10 +143,10 @@ export function MyTasksKanban({
   }, [columns, draggingId]);
 
   useEffect(() => {
-    if (!reviewFlashId) return;
-    const t = window.setTimeout(() => setReviewFlashId(null), 1600);
+    if (!completeFlashId) return;
+    const t = window.setTimeout(() => setCompleteFlashId(null), 2200);
     return () => window.clearTimeout(t);
-  }, [reviewFlashId]);
+  }, [completeFlashId]);
 
   useEffect(() => {
     if (!hint) return;
@@ -162,13 +171,8 @@ export function MyTasksKanban({
       }
 
       const from = source.droppableId as KanbanColumnId;
-      let to = destination.droppableId as KanbanColumnId;
+      const to = destination.droppableId as KanbanColumnId;
       const droppedOnDone = to === 'done';
-
-      // Done requires creator approval → land in Review with animation
-      if (droppedOnDone) {
-        to = 'review';
-      }
 
       const snapshot: ColumnsState = {
         todo: [...board.todo],
@@ -181,37 +185,81 @@ export function MyTasksKanban({
       const [moved] = srcList.splice(source.index, 1);
       if (!moved || moved.id !== draggableId) return;
 
-      const destList = from === to ? srcList : [...snapshot[to]];
+      const effectiveTo: KanbanColumnId =
+        to === 'done' && moved.supervisor?.id ? 'review' : to;
+      const landedReview = effectiveTo === 'review' && to === 'done';
+
+      const destList =
+        from === effectiveTo ? srcList : [...snapshot[effectiveTo]];
       const insertAt =
         droppedOnDone && from !== 'review'
           ? Math.min(destination.index, destList.length)
           : destination.index;
-      destList.splice(insertAt, 0, {
-        ...moved,
-        status: to === 'todo' ? 'todo' : to,
-      });
+      destList.splice(insertAt, 0, applyColumnMove(moved, effectiveTo));
 
       const next: ColumnsState = {
         ...snapshot,
-        [from]: from === to ? destList : srcList,
-        [to]: destList,
+        [from]: from === effectiveTo ? destList : srcList,
+        [effectiveTo]: destList,
       };
       setLocal(next);
       setError(null);
 
-      if (droppedOnDone) {
-        setReviewFlashId(moved.id);
+      if (landedReview) {
+        setCompleteFlashId(moved.id);
         setHint(t('myTasksPage.sentToReview'));
+      } else if (droppedOnDone) {
+        setCompleteFlashId(moved.id);
+        setHint(t('myTasksPage.movedToCompleted'));
+      } else if (effectiveTo === 'review') {
+        setHint(t('myTasksPage.sentToReview'));
+      } else if (from === 'done' && effectiveTo === 'todo') {
+        setHint(t('myTasksPage.resetToTodo'));
+      } else if (from === 'done') {
+        setHint(t('myTasksPage.leftCompleted'));
       }
 
-      if (from === to && !droppedOnDone) return;
+      if (from === effectiveTo && !droppedOnDone) return;
 
       try {
-        // API: done drop → submit for review (same as review)
-        await onMoved(moved, droppedOnDone ? 'review' : to);
+        await onMoved(moved, effectiveTo);
       } catch (e) {
         setLocal(null);
-        setReviewFlashId(null);
+        setCompleteFlashId(null);
+        setError(e instanceof Error ? e.message : t('common.failed'));
+      }
+    },
+    [board, onMoved, t],
+  );
+
+  const finishTask = useCallback(
+    async (task: MyTaskItem) => {
+      const blocked = finishBlockReason(task);
+      if (blocked === 'done') return;
+      if (blocked) {
+        setError(
+          t(
+            blocked === 'notStarted'
+              ? 'myTasksPage.finishNeedStart'
+              : 'myTasksPage.finishNeedMilestones',
+          ),
+        );
+        return;
+      }
+      const dest = finishDestination(task);
+      setLocal(relocateTaskToColumn(board, task.id, dest));
+      setCompleteFlashId(task.id);
+      setHint(
+        dest === 'review'
+          ? t('myTasksPage.sentToReview')
+          : t('myTasksPage.movedToCompleted'),
+      );
+      setError(null);
+      try {
+        await onMoved(task, dest);
+      } catch (e) {
+        setLocal(null);
+        setCompleteFlashId(null);
         setError(e instanceof Error ? e.message : t('common.failed'));
       }
     },
@@ -243,9 +291,9 @@ export function MyTasksKanban({
             exit={{ opacity: 0 }}
             className="text-xs font-medium px-3 py-2 rounded-xl"
             style={{
-              background: 'rgba(244,63,94,0.12)',
-              color: '#FB7185',
-              border: '1px solid rgba(244,63,94,0.3)',
+              background: 'rgba(34,197,94,0.12)',
+              color: '#4ADE80',
+              border: '1px solid rgba(34,197,94,0.35)',
             }}
           >
             {hint}
@@ -262,6 +310,7 @@ export function MyTasksKanban({
         onDragStart={(s) => setDraggingId(s.draggableId)}
         onDragEnd={(r) => void handleDragEnd(r)}
       >
+        <LayoutGroup>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-start">
           {COLUMNS.map((col) => {
             const tasks = board[col.id] || [];
@@ -330,24 +379,37 @@ export function MyTasksKanban({
                                   : 'grab',
                               }}
                             >
+                              <motion.div
+                                layoutId={
+                                  dragSnap.isDragging
+                                    ? undefined
+                                    : `my-task-${task.id}`
+                                }
+                                layout={!dragSnap.isDragging}
+                                transition={{
+                                  type: 'spring',
+                                  stiffness: 380,
+                                  damping: 34,
+                                }}
+                              >
                               <KanbanCard
                                 task={task}
                                 isDark={isDark}
                                 accent={col.accent}
                                 dragging={dragSnap.isDragging}
-                                highlight={
-                                  reviewFlashId === task.id &&
-                                  col.id === 'review'
-                                }
+                                completed={col.id === 'done'}
+                                highlight={completeFlashId === task.id}
                                 onOpen={() => {
                                   if (!dragSnap.isDragging) onOpen(task);
                                 }}
+                                onFinish={() => void finishTask(task)}
                                 onToggleMilestone={
                                   onToggleMilestone
                                     ? (itemId) => onToggleMilestone(task, itemId)
                                     : undefined
                                 }
                               />
+                              </motion.div>
                             </div>
                           )}
                         </Draggable>
@@ -373,6 +435,7 @@ export function MyTasksKanban({
             );
           })}
         </div>
+        </LayoutGroup>
       </DragDropContext>
       )}
     </div>
@@ -384,16 +447,20 @@ function KanbanCard({
   isDark,
   accent,
   dragging,
+  completed,
   highlight,
   onOpen,
+  onFinish,
   onToggleMilestone,
 }: {
   task: MyTaskItem;
   isDark: boolean;
   accent: string;
   dragging: boolean;
+  completed?: boolean;
   highlight?: boolean;
   onOpen: () => void;
+  onFinish: () => void;
   onToggleMilestone?: (itemId: string) => void;
 }) {
   const { formatDue } = useCalendar();
@@ -407,38 +474,76 @@ function KanbanCard({
   const total = milestones.length;
   const showMilestone = total > 0;
   const assignees = task.assignees || [];
+  const supervisor = task.supervisor;
   const desc = (task.description || '').replace(/\s+/g, ' ').trim();
+  const finished = completed || taskLooksCompleted(task);
+  const finishBlocked = finishBlockReason(task);
+  const placeColor = task.board.color || task.board.department?.color || accent;
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => {
-        if (!dragging) onOpen();
-      }}
-      onKeyDown={(e) => {
-        if (dragging) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className="w-full text-start rounded-2xl p-3.5 transition-shadow duration-200 select-none"
+      className="group/task relative w-full text-start rounded-2xl p-3.5 ps-4 transition-shadow duration-200 select-none overflow-hidden"
       style={{
-        background: isDark ? surfaceItem(isDark) : '#FFFFFF',
+        background: finished
+          ? hexToRgba('#22C55E', isDark ? 0.12 : 0.07)
+          : isDark
+            ? surfaceItem(isDark)
+            : '#FFFFFF',
         border: `1px solid ${
-          highlight ? hexToRgba('#F43F5E', 0.55) : borderSubtle(isDark)
+          highlight
+            ? hexToRgba('#22C55E', 0.7)
+            : finished
+              ? hexToRgba('#22C55E', 0.4)
+              : borderSubtle(isDark)
         }`,
         boxShadow: dragging
           ? `0 16px 40px ${hexToRgba(accent, 0.35)}`
           : highlight
-            ? `0 8px 28px ${hexToRgba('#F43F5E', 0.35)}`
+            ? `0 8px 28px ${hexToRgba('#22C55E', 0.4)}`
             : isDark
               ? '0 4px 18px rgba(0,0,0,0.35)'
               : '0 4px 16px rgba(15,23,42,0.08)',
       }}
     >
-      <div className="flex items-start justify-between gap-2 mb-2">
+      <button
+        type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!dragging) onOpen();
+        }}
+        className="absolute top-2.5 end-2.5 z-10 inline-flex items-center justify-center w-8 h-8 rounded-lg opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+        style={{
+          background: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.95)',
+          color: textSecondary(isDark),
+          border: `1px solid ${borderSubtle(isDark)}`,
+          boxShadow: isDark
+            ? '0 4px 14px rgba(0,0,0,0.35)'
+            : '0 4px 12px rgba(15,23,42,0.08)',
+        }}
+        title={t('board.editTask')}
+        aria-label={t('board.editTask')}
+      >
+        <MdEdit size={15} />
+      </button>
+      <span
+        className="absolute inset-y-0 start-0 w-1.5 rounded-s-2xl"
+        style={{ background: placeColor }}
+        aria-hidden
+      />
+      {highlight && (
+        <motion.span
+          initial={{ scale: 0.4, opacity: 0, y: -6 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          className="absolute -top-2 end-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold z-10"
+          style={{ background: '#16A34A', color: '#fff' }}
+        >
+          <MdCheckCircle size={12} />
+          {t('myTasksPage.taskCompleted')}
+        </motion.span>
+      )}
+      <div className="flex items-start justify-between gap-2 mb-2 pe-9">
         <span
           className="inline-flex items-center gap-1 text-[11px] font-medium"
           style={{ color: textMuted(isDark) }}
@@ -446,21 +551,32 @@ function KanbanCard({
           <MdAccessTime size={13} />
           {due || t('myTasksPage.noDueDate')}
         </span>
-        <span
-          className="p-0.5 rounded-md"
-          style={{ color: textMuted(isDark) }}
-          aria-hidden
-        >
-          <MdMoreHoriz size={16} />
-        </span>
+        {finished ? (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+            style={{
+              background: hexToRgba('#22C55E', isDark ? 0.28 : 0.16),
+              color: '#16A34A',
+            }}
+          >
+            <MdCheckCircle size={12} />
+            {t('myTasksPage.taskCompleted')}
+          </span>
+        ) : null}
       </div>
 
       <p
         className="text-[13px] font-bold leading-snug line-clamp-2"
-        style={{ color: textPrimary(isDark) }}
+        style={{
+          color: finished ? textMuted(isDark) : textPrimary(isDark),
+          textDecoration: finished ? 'line-through' : 'none',
+        }}
       >
         {task.title}
       </p>
+      <div className="mt-1.5">
+        <TaskPlaceChips task={task} isDark={isDark} />
+      </div>
       {desc ? (
         <p
           className="text-[11px] mt-1 line-clamp-2 leading-relaxed"
@@ -468,11 +584,7 @@ function KanbanCard({
         >
           {desc}
         </p>
-      ) : (
-        <p className="text-[11px] mt-1 truncate" style={{ color: textMuted(isDark) }}>
-          {task.board.name} · {task.list.title}
-        </p>
-      )}
+      ) : null}
 
       {showMilestone && (
         <div className="mt-3">
@@ -534,44 +646,74 @@ function KanbanCard({
         </div>
       )}
 
-      {assignees.length > 0 && (
-        <div className="mt-3 flex items-center gap-2">
-          <span className="text-[10px] font-medium" style={{ color: textMuted(isDark) }}>
-            {t('myTasksPage.assigned')}
-          </span>
-          <div className="flex -space-x-2">
-            {assignees.slice(0, 4).map((a) => (
+      {(supervisor || assignees.length > 0) && (
+        <div className="mt-3 space-y-1.5">
+          {supervisor && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-medium" style={{ color: textMuted(isDark) }}>
+                {t('boardTask.supervisor')}
+              </span>
               <span
-                key={a.id}
-                title={a.name}
-                className="w-6 h-6 rounded-full text-[9px] font-bold inline-flex items-center justify-center overflow-hidden -ml-1 first:ml-0"
+                title={supervisor.name}
+                className="w-6 h-6 rounded-full text-[9px] font-bold inline-flex items-center justify-center overflow-hidden"
                 style={{
                   background: isDark ? '#1E293B' : '#E2E8F0',
                   color: textPrimary(isDark),
                   border: `2px solid ${isDark ? '#131B2B' : '#fff'}`,
                 }}
               >
-                {a.avatarUrl ? (
+                {supervisor.avatarUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.avatarUrl} alt="" className="w-full h-full object-cover" />
+                  <img src={supervisor.avatarUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  initials(a.name)
+                  initials(supervisor.name)
                 )}
               </span>
-            ))}
-            {assignees.length > 4 && (
-              <span
-                className="w-6 h-6 rounded-full text-[9px] font-bold inline-flex items-center justify-center -ml-1"
-                style={{
-                  background: hexToRgba(accent, 0.2),
-                  color: accent,
-                  border: `2px solid ${isDark ? '#131B2B' : '#fff'}`,
-                }}
-              >
-                +{assignees.length - 4}
+              <span className="text-[11px] font-medium truncate" style={{ color: textSecondary(isDark) }}>
+                {supervisor.name}
               </span>
-            )}
-          </div>
+            </div>
+          )}
+          {assignees.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-medium" style={{ color: textMuted(isDark) }}>
+                {t('myTasksPage.assigned')}
+              </span>
+              <div className="flex -space-x-2">
+                {assignees.slice(0, 4).map((a) => (
+                  <span
+                    key={a.id}
+                    title={a.name}
+                    className="w-6 h-6 rounded-full text-[9px] font-bold inline-flex items-center justify-center overflow-hidden -ml-1 first:ml-0"
+                    style={{
+                      background: isDark ? '#1E293B' : '#E2E8F0',
+                      color: textPrimary(isDark),
+                      border: `2px solid ${isDark ? '#131B2B' : '#fff'}`,
+                    }}
+                  >
+                    {a.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={a.avatarUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      initials(a.name)
+                    )}
+                  </span>
+                ))}
+                {assignees.length > 4 && (
+                  <span
+                    className="w-6 h-6 rounded-full text-[9px] font-bold inline-flex items-center justify-center -ml-1"
+                    style={{
+                      background: hexToRgba(accent, 0.2),
+                      color: accent,
+                      border: `2px solid ${isDark ? '#131B2B' : '#fff'}`,
+                    }}
+                  >
+                    +{assignees.length - 4}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -594,6 +736,15 @@ function KanbanCard({
           </span>
         </div>
       </div>
+      {!finished && (
+        <div className="mt-3">
+          <MyTasksEndOfTask
+            isDark={isDark}
+            blocked={finishBlocked}
+            onFinish={onFinish}
+          />
+        </div>
+      )}
     </div>
   );
 }

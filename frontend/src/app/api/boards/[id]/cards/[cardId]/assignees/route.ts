@@ -86,6 +86,20 @@ export async function POST(req: Request, ctx: Ctx) {
     body: "You were assigned to a task",
   });
 
+  try {
+    const { emailUsersTaskAssigned } = await import("@/lib/notify-email");
+    await emailUsersTaskAssigned({
+      userIds: [body.data.userId],
+      actorId: session.user.id,
+      boardId,
+      cardId,
+      cardTitle: card.title,
+      workspaceId: board.workspaceId,
+    });
+  } catch (e) {
+    console.error("[assignees] task email failed", e);
+  }
+
   return NextResponse.json({ data: { ok: true } }, { status: 201 });
 }
 

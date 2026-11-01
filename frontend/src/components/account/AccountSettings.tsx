@@ -16,6 +16,7 @@ import { accountFadeUp } from '@/components/account/AccountShell';
 import { LanguageSwitcher } from '@/components/LanguageProvider/LanguageSwitcher';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
+import { useSession } from 'next-auth/react';
 
 type SessionRow = {
   id: string;
@@ -34,45 +35,10 @@ type Attempt = {
   createdAt: string;
 };
 
-type ChannelKey = 'chatMention' | 'letter' | 'mail' | 'assignment';
-type ChannelPref = { inApp: boolean; telegram: boolean; email: boolean };
-
-type Prefs = {
-  emailEnabled: boolean;
-  inAppEnabled: boolean;
-  telegramEnabled: boolean;
-  telegramChatId: string | null;
-  telegramUsername: string | null;
-  channels: Record<ChannelKey, ChannelPref>;
-};
-
-const DEFAULT_CHANNELS: Record<ChannelKey, ChannelPref> = {
-  chatMention: { inApp: true, telegram: false, email: true },
-  letter: { inApp: true, telegram: false, email: true },
-  mail: { inApp: true, telegram: false, email: true },
-  assignment: { inApp: true, telegram: false, email: true },
-};
-
-const ALL_CHANNEL_KEYS: ChannelKey[] = ['chatMention', 'letter', 'mail', 'assignment'];
-
-function channelLabel(key: ChannelKey, t: (key: string) => string): string {
-  switch (key) {
-    case 'chatMention':
-      return t('account.chatMentions');
-    case 'assignment':
-      return t('account.taskAssigned');
-    case 'letter':
-      return t('account.letters');
-    case 'mail':
-      return t('account.emailInbox');
-    default:
-      return key;
-  }
-}
-
 export function AccountSettings({ isDark }: { isDark: boolean }) {
   const { t } = useLang();
   const { calendar, setCalendar } = useCalendar();
+  const { data: session } = useSession();
   const { primaryColor } = useTheme();
   const pri = textPrimary(isDark);
   const sec = textSecondary(isDark);
@@ -88,38 +54,17 @@ export function AccountSettings({ isDark }: { isDark: boolean }) {
   const [pwErr, setPwErr] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [prefs, setPrefs] = useState<Prefs>({
-    emailEnabled: true,
-    inAppEnabled: true,
-    telegramEnabled: false,
-    telegramChatId: '',
-    telegramUsername: '',
-    channels: DEFAULT_CHANNELS,
-  });
-  const [prefsMsg, setPrefsMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadSecurity = useCallback(async () => {
-    const [sRes, aRes, pRes] = await Promise.all([
+    const [sRes, aRes] = await Promise.all([
       fetch('/api/account/sessions'),
       fetch('/api/account/login-attempts?limit=40'),
-      fetch('/api/account/notification-prefs'),
     ]);
     const sJson = await sRes.json();
     const aJson = await aRes.json();
-    const pJson = await pRes.json();
     if (sRes.ok) setSessions(sJson.data || []);
     if (aRes.ok) setAttempts(aJson.data || []);
-    if (pRes.ok && pJson.data) {
-      setPrefs({
-        emailEnabled: !!pJson.data.emailEnabled,
-        inAppEnabled: pJson.data.inAppEnabled !== false,
-        telegramEnabled: !!pJson.data.telegramEnabled,
-        telegramChatId: pJson.data.telegramChatId || '',
-        telegramUsername: pJson.data.telegramUsername || '',
-        channels: { ...DEFAULT_CHANNELS, ...(pJson.data.channels || {}) },
-      });
-    }
   }, []);
 
   useEffect(() => {
@@ -165,31 +110,6 @@ export function AccountSettings({ isDark }: { isDark: boolean }) {
     await loadSecurity();
   }
 
-  async function savePrefs() {
-    setBusy(true);
-    setPrefsMsg(null);
-    try {
-      const res = await fetch('/api/account/notification-prefs', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          emailEnabled: prefs.emailEnabled,
-          inAppEnabled: prefs.inAppEnabled,
-          telegramEnabled: prefs.telegramEnabled,
-          telegramChatId: prefs.telegramChatId || null,
-          telegramUsername: prefs.telegramUsername || null,
-          channels: prefs.channels,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || t('common.failed'));
-      setPrefsMsg(t('common.success'));
-    } catch (err) {
-      setPrefsMsg(err instanceof Error ? err.message : t('common.failed'));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const inputStyle = {
     borderColor: borderSubtle(isDark),
@@ -256,6 +176,11 @@ export function AccountSettings({ isDark }: { isDark: boolean }) {
           <p className="text-xs mt-1" style={{ color: mut }}>
             {t('account.passwordHint')}
           </p>
+          {session?.user?.mustChangePassword && (
+            <p className="text-sm font-semibold mt-2" style={{ color: primaryColor }}>
+              {t('account.mustChangePassword')}
+            </p>
+          )}
         </div>
         <form onSubmit={(e) => void changePassword(e)} className="grid sm:grid-cols-3 gap-3">
           <input
@@ -403,143 +328,6 @@ export function AccountSettings({ isDark }: { isDark: boolean }) {
         </ul>
       </motion.div>
 
-      {/* Notifications */}
-      <motion.div variants={accountFadeUp} className="rounded-2xl p-5 sm:p-6 space-y-4" style={card}>
-        <div>
-          <h3 className="text-base font-bold" style={{ color: pri }}>
-            {t('account.notifications')}
-          </h3>
-          <p className="text-xs mt-1" style={{ color: mut }}>
-            {t('account.notificationsHint')}
-          </p>
-        </div>
-
-        <label className="flex items-center justify-between gap-3 px-3 py-3 rounded-xl" style={{ background: surfaceItem(isDark) }}>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: pri }}>
-              {t('account.inAppNexus')}
-            </p>
-            <p className="text-xs" style={{ color: mut }}>
-              {t('account.inAppNexusHint')}
-            </p>
-          </div>
-          <input
-            type="checkbox"
-            checked={prefs.inAppEnabled}
-            onChange={(e) => setPrefs((p) => ({ ...p, inAppEnabled: e.target.checked }))}
-          />
-        </label>
-
-        <label className="flex items-center justify-between gap-3 px-3 py-3 rounded-xl" style={{ background: surfaceItem(isDark) }}>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: pri }}>
-              {t('account.emailNotifications')}
-            </p>
-            <p className="text-xs" style={{ color: mut }}>
-              {t('account.emailNotificationsHint')}
-            </p>
-          </div>
-          <input
-            type="checkbox"
-            checked={prefs.emailEnabled}
-            onChange={(e) => setPrefs((p) => ({ ...p, emailEnabled: e.target.checked }))}
-          />
-        </label>
-
-        <label className="flex items-center justify-between gap-3 px-3 py-3 rounded-xl" style={{ background: surfaceItem(isDark) }}>
-          <div>
-            <p className="text-sm font-semibold" style={{ color: pri }}>
-              {t('account.telegramNotifications')}
-            </p>
-            <p className="text-xs" style={{ color: mut }}>
-              {t('account.telegramNotificationsHint')}
-            </p>
-          </div>
-          <input
-            type="checkbox"
-            checked={prefs.telegramEnabled}
-            onChange={(e) => setPrefs((p) => ({ ...p, telegramEnabled: e.target.checked }))}
-          />
-        </label>
-
-        {prefs.telegramEnabled && (
-          <div className="grid sm:grid-cols-2 gap-3">
-            <input
-              placeholder={t('account.telegramUsername')}
-              value={prefs.telegramUsername || ''}
-              onChange={(e) => setPrefs((p) => ({ ...p, telegramUsername: e.target.value }))}
-              className="px-3.5 py-3 rounded-xl text-sm border outline-none"
-              style={inputStyle}
-            />
-            <input
-              placeholder={t('account.telegramChatId')}
-              value={prefs.telegramChatId || ''}
-              onChange={(e) => setPrefs((p) => ({ ...p, telegramChatId: e.target.value }))}
-              className="px-3.5 py-3 rounded-xl text-sm border outline-none"
-              style={inputStyle}
-            />
-          </div>
-        )}
-
-        <div className="pt-2">
-          <p className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: mut }}>
-            {t('account.byEvent')}
-          </p>
-          <div className="space-y-2">
-            {ALL_CHANNEL_KEYS.map((key) => (
-              <div
-                key={key}
-                className="px-3 py-3 rounded-xl"
-                style={{ background: surfaceItem(isDark) }}
-              >
-                <p className="text-sm font-semibold mb-2" style={{ color: pri }}>
-                  {channelLabel(key, t)}
-                </p>
-                <div className="flex flex-wrap gap-4 text-xs" style={{ color: sec }}>
-                  {(['inApp', 'email', 'telegram'] as const).map((ch) => (
-                    <label key={ch} className="inline-flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        checked={prefs.channels[key][ch]}
-                        onChange={(e) =>
-                          setPrefs((p) => ({
-                            ...p,
-                            channels: {
-                              ...p.channels,
-                              [key]: { ...p.channels[key], [ch]: e.target.checked },
-                            },
-                          }))
-                        }
-                      />
-                      {ch === 'inApp'
-                        ? t('account.channelNexus')
-                        : ch === 'email'
-                          ? t('account.channelEmail')
-                          : t('account.channelTelegram')}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          {prefsMsg && (
-            <p className="text-sm" style={{ color: sec }}>
-              {prefsMsg}
-            </p>
-          )}
-          <GlassButton
-            type="button"
-            disabled={busy}
-            onClick={() => void savePrefs()}
-            style={{ padding: '8px 16px', borderRadius: 12, marginLeft: 'auto' }}
-          >
-            {t('account.savePreferences')}
-          </GlassButton>
-        </div>
-      </motion.div>
     </div>
   );
 }

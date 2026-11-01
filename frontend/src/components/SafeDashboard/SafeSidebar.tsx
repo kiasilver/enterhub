@@ -216,6 +216,7 @@ function ProfilePill({
   menuItems: menuItemsProp,
   displayName = 'Ali Mohammadi',
   subtitle,
+  avatarUrl,
 }: {
   isDark: boolean;
   setActivePage: (id: string) => void;
@@ -223,6 +224,7 @@ function ProfilePill({
   menuItems?: { id: string; label: string }[];
   displayName?: string;
   subtitle?: string;
+  avatarUrl?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -286,7 +288,12 @@ function ProfilePill({
             color: textPrimary(isDark),
           }}
         >
-          {initials || '?'}
+          {avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+          ) : (
+            initials || '?'
+          )}
         </div>
 
         {/* Name */}
@@ -343,7 +350,12 @@ function ProfilePill({
                   color: textPrimary(isDark),
                 }}
               >
-                {initials || '?'}
+                {avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  initials || '?'
+                )}
               </div>
               <div className="flex-1 min-w-0 text-start">
                 <p className="text-sm font-semibold truncate" style={{ color: textPrimary(isDark) }}>{displayName}</p>
@@ -415,11 +427,16 @@ interface SafeSidebarProps {
   nav?: NavEntry[];
   brandTitle?: string;
   brandSubtitle?: string;
+  brandLogoUrl?: string | null;
+  brandLogoUrlDark?: string | null;
+  brandShowName?: boolean;
+  brandLogoColor?: string | null;
   /** Slot under brand (e.g. WorkspaceSwitcher) */
   headerSlot?: React.ReactNode;
   profileMenuItems?: { id: string; label: string }[];
   profileDisplayName?: string;
   profileSubtitle?: string;
+  profileAvatarUrl?: string | null;
 }
 
 export default function SafeSidebar({
@@ -429,12 +446,12 @@ export default function SafeSidebar({
   isOpen,
   side = 'left',
   nav,
-  brandTitle,
   brandSubtitle,
   headerSlot,
   profileMenuItems,
   profileDisplayName,
   profileSubtitle,
+  profileAvatarUrl,
 }: SafeSidebarProps) {
   const { primaryColor } = useTheme();
   const resolveBadgeColor = (c: string) => (c === PRIMARY_BADGE ? primaryColor : c);
@@ -579,7 +596,7 @@ export default function SafeSidebar({
             width={28}
             height={28}
             className="flex-shrink-0 object-contain"
-            style={{ width: 28, height: 28 }}
+            style={{ width: 28, height: 28, background: 'transparent' }}
             aria-hidden
           />
           <div className="min-w-0 flex-1 text-start">
@@ -587,7 +604,7 @@ export default function SafeSidebar({
               className="text-base font-black tracking-tight transition-colors duration-300 block truncate"
               style={{ color: textPrimary(isDark) }}
             >
-              {brandTitle || 'Enterhub'}
+              Enterhub
             </span>
             {brandSubtitle && (
               <span className="text-[10px] truncate block" style={{ color: textMuted(isDark) }}>
@@ -607,6 +624,7 @@ export default function SafeSidebar({
           menuItems={profileMenuItems}
           displayName={profileDisplayName}
           subtitle={profileSubtitle}
+          avatarUrl={profileAvatarUrl}
         />
 
         {/* Scrollable nav */}

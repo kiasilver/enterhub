@@ -84,6 +84,7 @@ const SUPERVISOR_EXTRA = [
   "board:create",
   "board:settings",
   "board:update",
+  "board:invite_guest",
   "list:create",
   "list:update",
   "card:assign",

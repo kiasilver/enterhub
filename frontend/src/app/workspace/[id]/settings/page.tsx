@@ -19,7 +19,8 @@ import {
   textPrimary,
   textSecondary,
 } from '@/components/SafeDashboard/theme';
-import { planLabelEn } from '@/lib/plans-catalog';
+import { planLabelEn, planLabelFa } from '@/lib/plans-catalog';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 
 type Ws = {
   id: string;
@@ -28,6 +29,7 @@ type Ws = {
   logoUrl: string | null;
   logoUrlDark: string | null;
   logoColor: string | null;
+  showCompanyName?: boolean;
   ownerTitle: string | null;
   planTier: string;
   owner: { id: string; name: string | null; email: string };
@@ -35,10 +37,13 @@ type Ws = {
 
 const MAX_LOGO_BYTES = 900_000;
 
-async function fileToDataUrl(file: File): Promise<string> {
-  if (!file.type.startsWith('image/')) throw new Error('Please choose an image file');
+async function fileToDataUrl(
+  file: File,
+  messages: { chooseImage: string; imageTooLarge: string },
+): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error(messages.chooseImage);
   if (file.size > MAX_LOGO_BYTES) {
-    throw new Error('Image too large (max ~900 KB)');
+    throw new Error(messages.imageTooLarge);
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -61,6 +66,10 @@ function LogoSlotCard({
   onPickGallery,
   onClear,
   hasImage,
+  uploadLabel,
+  galleryLabel,
+  removeLabel,
+  clickUpload,
 }: {
   title: string;
   hint: string;
@@ -74,6 +83,10 @@ function LogoSlotCard({
   onPickGallery: () => void;
   onClear: () => void;
   hasImage: boolean;
+  uploadLabel: string;
+  galleryLabel: string;
+  removeLabel: string;
+  clickUpload: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const labelColor = previewIsDark ? '#fff' : '#0a0a0a';
@@ -102,9 +115,10 @@ function LogoSlotCard({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          title="Click to upload image"
-          className="relative shrink-0 rounded-2xl transition-all duration-200 hover:ring-2 hover:ring-blue-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
+          title={clickUpload}
+          className="relative shrink-0 w-auto h-auto rounded-2xl transition-all duration-200 hover:ring-2 hover:ring-blue-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
           style={{
+            background: 'transparent',
             boxShadow: previewIsDark
               ? '0 0 0 1px rgba(255,255,255,0.12)'
               : '0 0 0 1px rgba(0,0,0,0.08)',
@@ -149,7 +163,7 @@ function LogoSlotCard({
             }}
           >
             <MdCloudUpload size={16} />
-            Upload file
+            {uploadLabel}
           </button>
           <button
             type="button"
@@ -162,7 +176,7 @@ function LogoSlotCard({
             }}
           >
             <MdCollections size={16} />
-            From gallery
+            {galleryLabel}
           </button>
           {hasImage && (
             <button
@@ -172,7 +186,7 @@ function LogoSlotCard({
               style={{ color: previewIsDark ? '#f87171' : '#dc2626' }}
             >
               <MdClose size={14} />
-              Remove
+              {removeLabel}
             </button>
           )}
         </div>
@@ -197,6 +211,7 @@ export default function WorkspaceSettingsGeneralPage() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t, lang } = useLang();
   const isDark = theme === 'dark';
 
   const [ws, setWs] = useState<Ws | null>(null);
@@ -204,6 +219,7 @@ export default function WorkspaceSettingsGeneralPage() {
   const [logoUrl, setLogoUrl] = useState('');
   const [logoUrlDark, setLogoUrlDark] = useState('');
   const [logoColor, setLogoColor] = useState('#3B82F6');
+  const [showCompanyName, setShowCompanyName] = useState(true);
   const [ownerTitle, setOwnerTitle] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -219,7 +235,7 @@ export default function WorkspaceSettingsGeneralPage() {
       return;
     }
     if (!res.ok) {
-      setError(json.error || 'Failed to load');
+      setError(json.error || t('common.loadFailed'));
       return;
     }
     const caps = json.data.capabilities;
@@ -237,8 +253,9 @@ export default function WorkspaceSettingsGeneralPage() {
     setLogoUrl(w.logoUrl || '');
     setLogoUrlDark(w.logoUrlDark || '');
     setLogoColor(w.logoColor || letterAvatarColor(w.name));
+    setShowCompanyName(w.showCompanyName !== false);
     setOwnerTitle(w.ownerTitle || '');
-  }, [workspaceId]);
+  }, [workspaceId, t]);
 
   useEffect(() => {
     void load();
@@ -247,18 +264,28 @@ export default function WorkspaceSettingsGeneralPage() {
   async function onUploadLight(file: File) {
     try {
       setError(null);
-      setLogoUrl(await fileToDataUrl(file));
+      setLogoUrl(
+        await fileToDataUrl(file, {
+          chooseImage: t('settingsUi.chooseImage'),
+          imageTooLarge: t('settingsUi.imageTooLarge'),
+        }),
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
+      setError(e instanceof Error ? e.message : t('settingsUi.uploadFailed'));
     }
   }
 
   async function onUploadDark(file: File) {
     try {
       setError(null);
-      setLogoUrlDark(await fileToDataUrl(file));
+      setLogoUrlDark(
+        await fileToDataUrl(file, {
+          chooseImage: t('settingsUi.chooseImage'),
+          imageTooLarge: t('settingsUi.imageTooLarge'),
+        }),
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
+      setError(e instanceof Error ? e.message : t('settingsUi.uploadFailed'));
     }
   }
 
@@ -267,6 +294,7 @@ export default function WorkspaceSettingsGeneralPage() {
     setBusy(true);
     setError(null);
     setOk(null);
+    const hasLogo = Boolean(logoUrl.trim() || logoUrlDark.trim());
     const res = await fetch(`/api/workspaces/${workspaceId}/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -276,15 +304,29 @@ export default function WorkspaceSettingsGeneralPage() {
         logoUrlDark: logoUrlDark.trim() || null,
         logoColor: logoColor || null,
         ownerTitle: ownerTitle.trim() || null,
+        showCompanyName: hasLogo ? showCompanyName : true,
       }),
     });
     const json = await res.json();
     setBusy(false);
     if (!res.ok) {
-      setError(json.error || 'Save failed');
+      setError(json.error || t('common.saveFailed'));
       return;
     }
-    setOk('Saved');
+    const saved = json.data as Ws;
+    window.dispatchEvent(
+      new CustomEvent('enterhub:branding', {
+        detail: {
+          id: saved.id,
+          name: saved.name,
+          logoUrl: saved.logoUrl,
+          logoUrlDark: saved.logoUrlDark,
+          logoColor: saved.logoColor,
+          showCompanyName: saved.showCompanyName !== false,
+        },
+      }),
+    );
+    setOk(t('common.save'));
     await load();
   }
 
@@ -297,25 +339,26 @@ export default function WorkspaceSettingsGeneralPage() {
   if (forbidden) {
     return (
       <p className="text-sm" style={{ color: textMuted(isDark) }}>
-        You need permission to edit workspace branding. Ask an admin.
+        {t('settingsUi.forbidden')}
       </p>
     );
   }
 
   if (!ws) {
-    return <p className="text-sm" style={{ color: textMuted(isDark) }}>Loading…</p>;
+    return <p className="text-sm" style={{ color: textMuted(isDark) }}>{t('common.loading')}</p>;
   }
 
   const displayName = name || ws.name;
+  const hasLogo = Boolean(logoUrl || logoUrlDark);
 
   return (
     <>
       <form onSubmit={(e) => void save(e)} className="w-full space-y-5">
         <SettingsGlassCard accent="#3b82f6">
           <SettingsSectionTitle
-            title="Branding"
-            subtitle="Upload a file or pick from the gallery. Dark logo is optional — we auto-invert the light logo if missing."
-            badge={planLabelEn(ws.planTier)}
+            title={t('settingsUi.branding')}
+            subtitle={t('settingsUi.brandingHint')}
+            badge={lang === 'fa' ? planLabelFa(ws.planTier) : planLabelEn(ws.planTier)}
             badgeColor="#3b82f6"
           />
 
@@ -326,24 +369,31 @@ export default function WorkspaceSettingsGeneralPage() {
               logoUrlDark={logoUrlDark || null}
               logoColor={logoColor}
               isDark={isDark}
-              size={56}
-              rounded="rounded-2xl"
+              size={40}
+              rounded="rounded-xl"
             />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold" style={{ color: textPrimary(isDark) }}>
-                {displayName}
-              </p>
+            {showCompanyName && (
+              <div className="min-w-0">
+                <p className="text-sm font-semibold" style={{ color: textPrimary(isDark) }}>
+                  {displayName}
+                </p>
+                <p className="text-xs" style={{ color: textMuted(isDark) }}>
+                  {t('settingsUi.livePreview')} · {isDark ? t('settingsUi.themeDark') : t('settingsUi.themeLight')}
+                  {isDark && logoUrl && !logoUrlDark ? ` · ${t('settingsUi.autoInverted')}` : ''}
+                </p>
+              </div>
+            )}
+            {!showCompanyName && (
               <p className="text-xs" style={{ color: textMuted(isDark) }}>
-                Live preview · {isDark ? 'dark' : 'light'} theme
-                {isDark && logoUrl && !logoUrlDark ? ' · auto-inverted light logo' : ''}
+                {t('settingsUi.livePreview')} · {t('settingsUi.nameHidden')}
               </p>
-            </div>
+            )}
           </div>
 
           <div className="grid md:grid-cols-2 gap-4 mb-5">
             <LogoSlotCard
-              title="Light mode logo"
-              hint="Shown in light theme"
+              title={t('settingsUi.lightLogo')}
+              hint={t('settingsUi.lightLogoHint')}
               slotBg={isDark ? 'rgba(255,255,255,0.94)' : hexToRgba('#f8fafc', 1)}
               previewIsDark={false}
               displayName={displayName}
@@ -354,10 +404,14 @@ export default function WorkspaceSettingsGeneralPage() {
               onUpload={(f) => void onUploadLight(f)}
               onPickGallery={() => setPickerFor('light')}
               onClear={() => setLogoUrl('')}
+              uploadLabel={t('settingsUi.uploadFile')}
+              galleryLabel={t('settingsUi.fromGallery')}
+              removeLabel={t('settingsUi.remove')}
+              clickUpload={t('settingsUi.clickUpload')}
             />
             <LogoSlotCard
-              title="Dark mode logo"
-              hint="Optional — otherwise light logo is color-reversed"
+              title={t('settingsUi.darkLogo')}
+              hint={t('settingsUi.darkLogoHint')}
               slotBg="#0a0a0a"
               previewIsDark
               displayName={displayName}
@@ -368,13 +422,17 @@ export default function WorkspaceSettingsGeneralPage() {
               onUpload={(f) => void onUploadDark(f)}
               onPickGallery={() => setPickerFor('dark')}
               onClear={() => setLogoUrlDark('')}
+              uploadLabel={t('settingsUi.uploadFile')}
+              galleryLabel={t('settingsUi.fromGallery')}
+              removeLabel={t('settingsUi.remove')}
+              clickUpload={t('settingsUi.clickUpload')}
             />
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
             <label className="block space-y-1.5 sm:col-span-2">
               <span className="text-xs font-medium" style={{ color: textSecondary(isDark) }}>
-                Company name
+                {t('settingsUi.companyName')}
               </span>
               <input
                 value={name}
@@ -384,11 +442,31 @@ export default function WorkspaceSettingsGeneralPage() {
                 className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
                 style={field}
               />
+              <label
+                className="flex items-start gap-2.5 pt-2 cursor-pointer select-none"
+                style={{ opacity: hasLogo ? 1 : 0.5 }}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={showCompanyName}
+                  disabled={!hasLogo}
+                  onChange={(e) => setShowCompanyName(e.target.checked)}
+                />
+                <span>
+                  <span className="block text-xs font-medium" style={{ color: textPrimary(isDark) }}>
+                    {t('settingsUi.showCompanyName')}
+                  </span>
+                  <span className="block text-[11px] mt-0.5" style={{ color: textMuted(isDark) }}>
+                    {t('settingsUi.showCompanyNameHint')}
+                  </span>
+                </span>
+              </label>
             </label>
 
             <label className="block space-y-1.5">
               <span className="text-xs font-medium" style={{ color: textSecondary(isDark) }}>
-                Avatar color (when no logo)
+                {t('settingsUi.avatarColor')}
               </span>
               <div className="flex items-center gap-3">
                 <input
@@ -408,12 +486,12 @@ export default function WorkspaceSettingsGeneralPage() {
 
             <label className="block space-y-1.5">
               <span className="text-xs font-medium" style={{ color: textSecondary(isDark) }}>
-                Your title
+                {t('settingsUi.yourTitle')}
               </span>
               <input
                 value={ownerTitle}
                 onChange={(e) => setOwnerTitle(e.target.value)}
-                placeholder="Founder, CEO, …"
+                placeholder={t('settingsUi.titlePlaceholder')}
                 className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
                 style={field}
               />
@@ -433,7 +511,7 @@ export default function WorkspaceSettingsGeneralPage() {
             className="mt-5 px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
             style={{ background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }}
           >
-            {busy ? 'Saving…' : 'Save changes'}
+            {busy ? t('common.saving') : t('common.save')}
           </button>
         </SettingsGlassCard>
       </form>

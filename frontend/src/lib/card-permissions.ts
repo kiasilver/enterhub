@@ -5,12 +5,17 @@ import { isDoneListTitle } from "@/lib/board-access";
 import { isBoardDepartmentSupervisor } from "@/lib/departments";
 
 type BoardRef = { id?: string; workspaceId: string };
-type CardRef = { id?: string; createdById?: string | null };
+type CardRef = {
+  id?: string;
+  createdById?: string | null;
+  supervisorId?: string | null;
+};
 
 /** Contextual role on a single card */
 export type CardRole =
   | "board_admin"
   | "creator"
+  | "supervisor"
   | "assignee"
   | "watcher"
   | "guest"
@@ -108,6 +113,7 @@ export async function resolveCardCapabilities(
     canCommentPerm,
     canAttachPerm,
     canAutomate,
+    cardMeta,
   ] = await Promise.all([
     cardId
       ? prisma.cardAssignee
@@ -126,9 +132,17 @@ export async function resolveCardCapabilities(
     hasPermission(userId, board.workspaceId, "comment:create"),
     hasPermission(userId, board.workspaceId, "attachment:create"),
     hasPermission(userId, board.workspaceId, "automation:manage"),
+    cardId
+      ? prisma.card.findUnique({
+          where: { id: cardId },
+          select: { supervisorId: true, createdById: true },
+        })
+      : Promise.resolve(null),
   ]);
 
   const isCreator = !!(card.createdById && card.createdById === userId);
+  const supervisorId = card.supervisorId ?? cardMeta?.supervisorId ?? null;
+  const isTaskSupervisor = !!(supervisorId && supervisorId === userId);
   const deptSupervisor = boardId
     ? await isBoardDepartmentSupervisor(userId, boardId)
     : false;
@@ -161,7 +175,8 @@ export async function resolveCardCapabilities(
   if (isBoardAdmin) {
     return adminCaps({
       canSeeViews: canViews,
-      canSeeFinancialFields: canFinancial || true,
+      // Never force financial visibility — requires field:financial explicitly
+      canSeeFinancialFields: canFinancial,
       canOverrideAutomation: canAutomate || canSettings,
     });
   }
@@ -180,6 +195,28 @@ export async function resolveCardCapabilities(
       canAssign: true,
       canMove: true,
       canMoveToDone: canCompleteDone,
+      canChecklist: true,
+      canAttach: canAttachPerm,
+      canComment: canCommentPerm,
+      canSeeFinancialFields: canFinancial,
+      canSeeViews: canViews,
+    };
+  }
+
+  if (isTaskSupervisor) {
+    return {
+      role: "supervisor",
+      canView: true,
+      canEditTitle: true,
+      canEditDescription: true,
+      canEditDueDate: true,
+      canEditPriority: true,
+      canEditLabels: true,
+      canOverrideAutomation: canAutomate,
+      canDelete: false,
+      canAssign: true,
+      canMove: true,
+      canMoveToDone: true,
       canChecklist: true,
       canAttach: canAttachPerm,
       canComment: canCommentPerm,
@@ -325,27 +362,161 @@ export async function notifyUsers(input: {
   title: string;
   body?: string | null;
 }): Promise<void> {
-  const recipients = [...new Set(input.userIds)].filter(
+  const candidates = [...new Set(input.userIds)].filter(
     (id) => id && id !== input.actorId,
   );
-  if (!recipients.length) return;
-  try {
-    await prisma.notification.createMany({
-      data: recipients.map((uid) => ({
-        userId: uid,
-        workspaceId: input.workspaceId,
-        boardId: input.boardId ?? null,
-        cardId: input.cardId ?? null,
-        calendarEventId: input.calendarEventId ?? null,
-        href: input.href ?? null,
-        actorId: input.actorId ?? null,
-        type: input.type,
-        title: input.title,
-        body: input.body ?? null,
-      })),
-    });
-  } catch (err) {
-    console.error("[notifyUsers] failed", err);
+  if (!candidates.length) return;
+
+  const {
+    filterUsersForInApp,
+    filterUsersForEmail,
+    filterUsersForSms,
+    eventKeyFromNotificationType,
+    NOTIFICATION_SMS_EVENTS,
+  } = await import("@/lib/notification-prefs");
+
+  const recipients = await filterUsersForInApp(prisma, candidates, input.type);
+  if (recipients.length) {
+    try {
+      await prisma.notification.createMany({
+        data: recipients.map((uid) => ({
+          userId: uid,
+          workspaceId: input.workspaceId,
+          boardId: input.boardId ?? null,
+          cardId: input.cardId ?? null,
+          calendarEventId: input.calendarEventId ?? null,
+          href: input.href ?? null,
+          actorId: input.actorId ?? null,
+          type: input.type,
+          title: input.title,
+          body: input.body ?? null,
+        })),
+      });
+    } catch (err) {
+      console.error("[notifyUsers] failed", err);
+    }
+    try {
+      const { publishBadgeRefresh } = await import("@/lib/badge-bus");
+      for (const userId of recipients) {
+        publishBadgeRefresh({
+          workspaceId: input.workspaceId,
+          userId,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Email for non-assignment events (assignment uses dedicated mailer)
+  const eventKey = eventKeyFromNotificationType(input.type);
+  if (eventKey && eventKey !== "assignment" && eventKey !== "otp") {
+    try {
+      const { isEmailConfigured, isLocalhostRuntime } = await import(
+        "@/lib/email"
+      );
+      if (isEmailConfigured() && !isLocalhostRuntime()) {
+        const emailRecipients = await filterUsersForEmail(
+          prisma,
+          candidates,
+          eventKey,
+        );
+        if (emailRecipients.length) {
+          const users = await prisma.user.findMany({
+            where: { id: { in: emailRecipients }, email: { not: null } },
+            select: { id: true, email: true, name: true, firstName: true },
+          });
+          const { sendGatewayMail } = await import("@/lib/mail-gateway");
+          const base = (
+            process.env.APP_URL ||
+            process.env.AUTH_URL ||
+            process.env.NEXTAUTH_URL ||
+            "https://enterhub.org"
+          ).replace(/\/$/, "");
+          const link = input.href
+            ? input.href.startsWith("http")
+              ? input.href
+              : `${base}${input.href.startsWith("/") ? "" : "/"}${input.href}`
+            : base;
+          await Promise.all(
+            users.map(async (u) => {
+              if (!u.email) return;
+              try {
+                await sendGatewayMail({
+                  to: u.email,
+                  subject: input.title,
+                  template: "notification",
+                  vars: {
+                    name:
+                      u.firstName || u.name || u.email.split("@")[0] || "there",
+                    title: input.title,
+                    body: input.body || "",
+                    link,
+                  },
+                });
+              } catch (e) {
+                console.error("[notify-email]", u.email, e);
+              }
+            }),
+          );
+        }
+      }
+    } catch {
+      // ignore mail failures
+    }
+  }
+
+  if (eventKey && NOTIFICATION_SMS_EVENTS.includes(eventKey)) {
+    try {
+      const { isLocalhostRuntime } = await import("@/lib/email");
+      const { isSmsirReady, sendSmsirVerify } = await import(
+        "@/lib/smsir"
+      );
+      if (!isLocalhostRuntime() && (await isSmsirReady())) {
+        const smsIds = await filterUsersForSms(prisma, candidates, eventKey);
+        if (smsIds.length) {
+          const users = await prisma.user.findMany({
+            where: { id: { in: smsIds }, phone: { not: null } },
+            select: { id: true, phone: true },
+          });
+          const kindMap: Record<
+            string,
+            | "assignment"
+            | "supervisor"
+            | "approval"
+            | "invite"
+            | "letter"
+            | "mail"
+          > = {
+            assignment: "assignment",
+            taskSupervisor: "supervisor",
+            taskApproval: "approval",
+            invite: "invite",
+            letter: "letter",
+            mail: "mail",
+          };
+          const kind = kindMap[eventKey];
+          if (kind) {
+            const snippet = (input.title || input.body || "").slice(0, 40);
+            await Promise.all(
+              users.map(async (u) => {
+                if (!u.phone) return;
+                await sendSmsirVerify({
+                  mobile: u.phone,
+                  kind,
+                  parameters:
+                    kind === "invite"
+                      ? [{ name: "STATUS", value: "OK" }]
+                      : [{ name: "TASK", value: snippet || "-" }],
+                });
+              }),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[notify-sms]", e);
+    }
   }
 }
 

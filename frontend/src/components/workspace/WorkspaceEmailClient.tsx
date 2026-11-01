@@ -2,16 +2,28 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { MdMailOutline } from 'react-icons/md';
 import SafeEmail, { type Email } from '@/components/SafeDashboard/SafeEmail';
-import { textMuted } from '@/components/SafeDashboard/theme';
+import { EmailConnectGuide } from '@/components/email/EmailConnectGuide';
+import { hexToRgba, textMuted } from '@/components/SafeDashboard/theme';
+
+type Mailbox = {
+  id: string;
+  isActive: boolean;
+  lastError: string | null;
+};
 
 type MemberOpt = { id: string; label: string; email: string };
 
 export function WorkspaceEmailClient({ workspaceId }: { workspaceId: string }) {
-  const { theme } = useTheme();
+  const { theme, primaryColor } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
   const [emails, setEmails] = useState<Email[]>([]);
   const [members, setMembers] = useState<MemberOpt[]>([]);
+  const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
+  const [showConnect, setShowConnect] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +52,18 @@ export function WorkspaceEmailClient({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await fetch(`/api/workspaces/${workspaceId}/email/accounts`);
+      const json = await res.json();
+      if (!res.ok) {
+        setMailboxes([]);
+        return;
+      }
+      setMailboxes(json.data || []);
+    })();
+  }, [workspaceId]);
 
   useEffect(() => {
     void (async () => {
@@ -98,7 +122,7 @@ export function WorkspaceEmailClient({ workspaceId }: { workspaceId: string }) {
   if (loading && emails.length === 0) {
     return (
       <div className="h-full w-full flex items-center justify-center text-sm" style={{ color: textMuted(isDark) }}>
-        Loading inbox…
+        {t('common.loading')}
       </div>
     );
   }
@@ -111,8 +135,11 @@ export function WorkspaceEmailClient({ workspaceId }: { workspaceId: string }) {
     );
   }
 
+  const connected = (mailboxes || []).some((m) => m.isActive && !m.lastError);
+  const mailboxError = (mailboxes || []).find((m) => m.lastError)?.lastError || null;
+
   return (
-    <div className="h-full w-full min-h-0 flex flex-col">
+    <div className="relative h-full w-full min-h-0 overflow-hidden flex flex-col">
       <SafeEmail
         isDark={isDark}
         live={{
@@ -124,6 +151,30 @@ export function WorkspaceEmailClient({ workspaceId }: { workspaceId: string }) {
           onToggleStar,
         }}
       />
+      {mailboxes !== null && !connected && showConnect && (
+        <EmailConnectGuide
+          workspaceId={workspaceId}
+          isDark={isDark}
+          asModal
+          onClose={() => setShowConnect(false)}
+          error={mailboxError ? t('emailPage.mailboxError') : null}
+        />
+      )}
+      {mailboxes !== null && !connected && !showConnect && (
+        <button
+          type="button"
+          onClick={() => setShowConnect(true)}
+          className="absolute bottom-5 start-5 z-20 inline-flex items-center gap-2 min-h-[44px] px-4 rounded-2xl text-sm font-semibold shadow-lg"
+          style={{
+            background: hexToRgba(primaryColor, 0.14),
+            color: primaryColor,
+            border: `1px solid ${hexToRgba(primaryColor, 0.28)}`,
+          }}
+        >
+          <MdMailOutline size={18} />
+          {t('emailPage.reconnect')}
+        </button>
+      )}
     </div>
   );
 }

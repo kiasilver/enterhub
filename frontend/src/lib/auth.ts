@@ -7,13 +7,19 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { isIpAllowed } from "@/lib/ip-allowlist";
 import { normalizeIranPhone } from "@/lib/smsir";
-import { getVerificationPolicy } from "@/lib/platform-settings";
+import { getVerificationPolicy, verifyPhoneOtp } from "@/lib/platform-settings";
 
 const credentialsSchema = z.object({
   /** Email or Iranian phone */
   login: z.string().min(3),
-  password: z.string().min(8),
-});
+  password: z.string().optional(),
+  otp: z.string().optional(),
+}).refine(
+  (d) =>
+    Boolean(d.otp && d.otp.replace(/\D/g, "").length >= 4) ||
+    Boolean(d.password && d.password.length >= 8),
+  { message: "password_or_otp_required" },
+);
 
 async function findUserByLogin(login: string) {
   const trimmed = login.trim();
@@ -31,7 +37,8 @@ async function findUserByLogin(login: string) {
  */
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
-  session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 30 },
+  // Cookie/JWT lifetime — keep in sync with DB session (1 week)
+  session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 7 },
   pages: {
     signIn: "/signin",
   },
@@ -41,6 +48,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         login: { label: "Phone or email", type: "text" },
         password: { label: "Password", type: "password" },
+        otp: { label: "SMS code", type: "text" },
         // backward compat
         email: { label: "Email", type: "email" },
       },
@@ -49,6 +57,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const parsed = credentialsSchema.safeParse({
           login: loginRaw,
           password: raw?.password,
+          otp: raw?.otp,
         });
         const ip =
           request?.headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -82,7 +91,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         const user = await findUserByLogin(parsed.data.login);
-        if (!user?.passwordHash) {
+        if (!user) {
           await logAttempt(parsed.data.login, false);
           return null;
         }
@@ -92,10 +101,35 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           throw new Error("ACCOUNT_BLOCKED");
         }
 
-        const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
-        if (!valid) {
-          await logAttempt(parsed.data.login, false, user.id);
-          return null;
+        const otp = (parsed.data.otp || "").replace(/\D/g, "");
+        if (otp) {
+          const phone = normalizeIranPhone(parsed.data.login) || user.phone;
+          if (!phone) {
+            await logAttempt(parsed.data.login, false, user.id);
+            return null;
+          }
+          const ok = await verifyPhoneOtp({
+            phone,
+            code: otp,
+            purpose: "login",
+          });
+          if (!ok) {
+            await logAttempt(parsed.data.login, false, user.id);
+            return null;
+          }
+        } else {
+          if (!user.passwordHash) {
+            await logAttempt(parsed.data.login, false, user.id);
+            return null;
+          }
+          const valid = await bcrypt.compare(
+            parsed.data.password || "",
+            user.passwordHash,
+          );
+          if (!valid) {
+            await logAttempt(parsed.data.login, false, user.id);
+            return null;
+          }
         }
 
         const strictWs = await prisma.workspaceMember.findFirst({
@@ -127,8 +161,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         const minTimeoutHours = memberships.reduce(
-          (min, m) => Math.min(min, m.workspace.sessionTimeoutHours || 24),
-          24,
+          (min, m) => Math.min(min, m.workspace.sessionTimeoutHours || 168),
+          168,
         );
 
         const sessionJti = randomUUID();
@@ -158,6 +192,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           isSuperAdmin: user.isSuperAdmin,
           sessionJti,
           sessionExpiresAt: expiresAt.toISOString(),
+          mustChangePassword: Boolean(user.mustChangePassword),
         };
       },
     }),
@@ -195,7 +230,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             name: user.name || email.split("@")[0],
             emailVerifiedAt: new Date(),
             passwordHash: null,
-            pendingOnboarding: true,
+            pendingOnboarding: false,
           },
         });
       } else if (!row.googleId) {
@@ -220,6 +255,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         );
         token.sessionJti = (user as { sessionJti?: string }).sessionJti;
         token.sessionExpiresAt = (user as { sessionExpiresAt?: string }).sessionExpiresAt;
+        token.mustChangePassword = Boolean(
+          (user as { mustChangePassword?: boolean }).mustChangePassword,
+        );
         token.impersonating = false;
         token.impersonatorId = undefined;
         delete token.error;
@@ -227,7 +265,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       if (account?.provider === "google" && token.sub) {
         const sessionJti = randomUUID();
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await prisma.session.create({
           data: {
             userId: String(token.sub),
@@ -272,11 +310,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (token.sub) {
         const u = await prisma.user.findUnique({
           where: { id: String(token.sub) },
-          select: { blockedAt: true },
+          select: {
+            blockedAt: true,
+            avatarUrl: true,
+            name: true,
+            mustChangePassword: true,
+          },
         });
         if (u?.blockedAt) {
           return { ...token, sub: undefined, error: "AccountBlocked" };
         }
+        token.picture = u?.avatarUrl || null;
+        if (u?.name) token.name = u.name;
+        token.mustChangePassword = Boolean(u?.mustChangePassword);
       }
 
       return token;
@@ -292,6 +338,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.impersonating = Boolean(token.impersonating);
         session.user.impersonatorId = token.impersonatorId as string | undefined;
         session.user.sessionJti = token.sessionJti as string | undefined;
+        session.user.mustChangePassword = Boolean(token.mustChangePassword);
+        session.user.image = (token.picture as string | null | undefined) || null;
+        if (token.name) session.user.name = String(token.name);
       }
       return session;
     },

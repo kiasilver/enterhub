@@ -162,6 +162,11 @@ body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
+html[lang="fa"],
+html[data-locale="fa"] {
+  font-family: var(--font-persian) !important;
+}
+
 html[lang="fa"] body,
 html[data-locale="fa"] body {
   font-family: var(--font-persian) !important;
@@ -171,6 +176,7 @@ html[data-locale="fa"] body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Portals (Radix dialogs, tooltips, date pickers) render outside .eh-app-shell */
 html[lang="fa"] .eh-app-shell,
 html[data-locale="fa"] .eh-app-shell,
 html[lang="fa"] .eh-app-shell *,
@@ -179,40 +185,55 @@ html[data-locale="fa"] .eh-app-shell input,
 html[data-locale="fa"] .eh-app-shell textarea,
 html[lang="fa"] .eh-app-shell button,
 html[lang="fa"] .eh-app-shell input,
-html[lang="fa"] .eh-app-shell textarea {
+html[lang="fa"] .eh-app-shell textarea,
+html[lang="fa"] [data-slot],
+html[data-locale="fa"] [data-slot],
+html[lang="fa"] [role="dialog"],
+html[data-locale="fa"] [role="dialog"],
+html[lang="fa"] [role="dialog"] *:not([class*="material-icons"]),
+html[data-locale="fa"] [role="dialog"] *:not([class*="material-icons"]),
+html[lang="fa"] [data-radix-popper-content-wrapper],
+html[data-locale="fa"] [data-radix-popper-content-wrapper],
+html[lang="fa"] [data-radix-popper-content-wrapper] *:not([class*="material-icons"]),
+html[data-locale="fa"] [data-radix-popper-content-wrapper] *:not([class*="material-icons"]) {
   font-family: var(--font-persian) !important;
 }
 
-/* Keep Material Icons ligatures under Persian font override */
-html[lang="fa"] .eh-app-shell .material-icons,
-html[data-locale="fa"] .eh-app-shell .material-icons {
+/* Keep Material Icons ligatures under Persian font override (shell + portaled dialogs) */
+html[lang="fa"] .material-icons,
+html[data-locale="fa"] .material-icons {
   font-family: "Material Icons" !important;
   font-feature-settings: "liga";
   direction: ltr;
+  unicode-bidi: isolate;
 }
-html[lang="fa"] .eh-app-shell .material-icons-outlined,
-html[data-locale="fa"] .eh-app-shell .material-icons-outlined {
+html[lang="fa"] .material-icons-outlined,
+html[data-locale="fa"] .material-icons-outlined {
   font-family: "Material Icons Outlined" !important;
   font-feature-settings: "liga";
   direction: ltr;
+  unicode-bidi: isolate;
 }
-html[lang="fa"] .eh-app-shell .material-icons-round,
-html[data-locale="fa"] .eh-app-shell .material-icons-round {
+html[lang="fa"] .material-icons-round,
+html[data-locale="fa"] .material-icons-round {
   font-family: "Material Icons Round" !important;
   font-feature-settings: "liga";
   direction: ltr;
+  unicode-bidi: isolate;
 }
-html[lang="fa"] .eh-app-shell .material-icons-sharp,
-html[data-locale="fa"] .eh-app-shell .material-icons-sharp {
+html[lang="fa"] .material-icons-sharp,
+html[data-locale="fa"] .material-icons-sharp {
   font-family: "Material Icons Sharp" !important;
   font-feature-settings: "liga";
   direction: ltr;
+  unicode-bidi: isolate;
 }
-html[lang="fa"] .eh-app-shell .material-icons-two-tone,
-html[data-locale="fa"] .eh-app-shell .material-icons-two-tone {
+html[lang="fa"] .material-icons-two-tone,
+html[data-locale="fa"] .material-icons-two-tone {
   font-family: "Material Icons Two Tone" !important;
   font-feature-settings: "liga";
   direction: ltr;
+  unicode-bidi: isolate;
 }
 
 /* Keep code / mono faces Latin */
@@ -263,6 +284,21 @@ html[data-locale="fa"] .font-black { font-weight: 900; letter-spacing: 0; }
     opacity: 0.7;
     transform: scale(1.02) rotate(-1deg);
   }
+}
+
+/* Idle caret on editable fields (EditableTextField) */
+@keyframes ehCaretBlink {
+  0%,
+  49% {
+    opacity: 0.65;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.eh-edit-caret {
+  animation: ehCaretBlink 1.05s steps(1, end) infinite;
 }
 
 /* Hide native number input scroll arrows */

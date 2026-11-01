@@ -11,7 +11,14 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const secret = process.env["AUTH_SECRET"] || process.env["NEXTAUTH_SECRET"];
 
-  const token = await getToken({ req, secret });
+  // Production uses https AUTH_URL → Auth.js sets `__Secure-authjs.session-token`.
+  // Without secureCookie:true, getToken misses the session and loops back to /signin.
+  const secureCookie =
+    (process.env["AUTH_URL"] || process.env["NEXTAUTH_URL"] || "").startsWith(
+      "https://",
+    ) || process.env.NODE_ENV === "production";
+
+  const token = await getToken({ req, secret, secureCookie });
 
   const isSuperAdminPath = pathname.startsWith("/superadmin");
   const isWorkspacePath = pathname.startsWith("/workspace");

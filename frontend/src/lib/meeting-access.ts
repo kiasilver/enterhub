@@ -1,8 +1,8 @@
-/** In-app HD meetings — available on paid professional plans (Base/Advanced). */
+/** Meetings / live stream run on live.ireg for every workspace member. */
 export type MeetingPlanTier = 'FREE' | 'PRO' | 'ENTERPRISE' | string;
 
-export function canUseMeetings(planTier: MeetingPlanTier | null | undefined): boolean {
-  return planTier === 'PRO' || planTier === 'ENTERPRISE';
+export function canUseMeetings(_planTier?: MeetingPlanTier | null): boolean {
+  return true;
 }
 
 export type ScreenShareQuality = '720p' | '1080p';

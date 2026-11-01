@@ -42,9 +42,7 @@ export async function GET(_req: Request, { params }: Params) {
             maxParticipantsHint: ws.planTier === 'ENTERPRISE' ? 50 : 16,
           }
         : null,
-      upgradeHint: allowed
-        ? null
-        : 'HD Meetings with screen share (720p / 1080p) are included on Base and Advanced plans.',
+      upgradeHint: null,
     },
   });
 }

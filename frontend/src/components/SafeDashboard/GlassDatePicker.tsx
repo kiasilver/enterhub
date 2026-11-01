@@ -6,6 +6,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 import { textPrimary, textSecondary, textMuted, borderSubtle, hexToRgba, panelFill } from './theme';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
+import { toFaDigits } from '@/lib/app-date';
 
 interface GlassDatePickerProps {
   isDark: boolean;
@@ -16,7 +19,6 @@ interface GlassDatePickerProps {
   disabled?: boolean;
 }
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 function getDaysInMonth(year: number, month: number) {
@@ -31,12 +33,16 @@ export default function GlassDatePicker({
   isDark,
   value,
   onChange,
-  placeholder = 'Select date',
+  placeholder,
   className = '',
   disabled = false,
 }: GlassDatePickerProps) {
   const { primaryColor } = useTheme();
+  const { t, lang } = useLang();
+  const { formatDate } = useCalendar();
   const accent = primaryColor || '#2563EB';
+  const datePlaceholder = placeholder || t('common.selectDate');
+  const dayLabels = lang === 'fa' ? ['ی', 'د', 'س', 'چ', 'پ', 'ج', 'ش'] : DAYS;
   const [isOpen, setIsOpen] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(value ? value.getMonth() : new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(value ? value.getFullYear() : new Date().getFullYear());
@@ -154,7 +160,7 @@ export default function GlassDatePicker({
           color: value ? pri : mut,
         }}
       >
-        <span>{value ? value.toLocaleDateString() : placeholder}</span>
+        <span>{value ? formatDate(value) : datePlaceholder}</span>
         <Calendar size={16} style={{ color: isOpen ? accent : undefined }} />
       </button>
 
@@ -175,29 +181,29 @@ export default function GlassDatePicker({
               WebkitBackdropFilter: 'blur(28px)',
               boxShadow: isDark ? '0 12px 36px rgba(0,0,0,0.45)' : '0 12px 36px rgba(0,0,0,0.12)',
             }}
-            className="p-4 rounded-2xl"
+            className="p-4 rounded-2xl text-start"
           >
             <div className="flex items-center justify-between mb-4">
-              <button type="button" onClick={handlePrevMonth} className="p-1.5 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10" style={{ color: sec }}>
+              <button type="button" onClick={handlePrevMonth} className="p-1.5 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10 rtl:rotate-180" style={{ color: sec }}>
                 <ChevronLeft size={18} />
               </button>
               <div className="text-[13px] font-semibold" style={{ color: pri }}>
-                {MONTHS[currentMonth]} {currentYear}
+                {formatDate(new Date(currentYear, currentMonth, 1), 'monthYear')}
               </div>
-              <button type="button" onClick={handleNextMonth} className="p-1.5 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10" style={{ color: sec }}>
+              <button type="button" onClick={handleNextMonth} className="p-1.5 rounded-lg transition-colors hover:bg-black/10 dark:hover:bg-white/10 rtl:rotate-180" style={{ color: sec }}>
                 <ChevronRight size={18} />
               </button>
             </div>
 
-            <div className="grid grid-cols-7 gap-1 mb-2">
-              {DAYS.map(d => (
+            <div className="grid grid-cols-7 gap-1 mb-2" dir="ltr">
+              {dayLabels.map(d => (
                 <div key={d} className="text-center text-[10px] font-bold uppercase tracking-wider" style={{ color: mut }}>
                   {d}
                 </div>
               ))}
             </div>
 
-            <div className="grid grid-cols-7 gap-1">
+            <div className="grid grid-cols-7 gap-1" dir="ltr">
               {blanks.map((_, i) => (
                 <div key={`blank-${i}`} className="h-8" />
               ))}
@@ -216,7 +222,7 @@ export default function GlassDatePicker({
                       border: isToday && !isSelected ? `1px solid ${accent}` : '1px solid transparent',
                     }}
                   >
-                    {d}
+                    {lang === 'fa' ? toFaDigits(String(d)) : d}
                   </button>
                 );
               })}
@@ -224,10 +230,10 @@ export default function GlassDatePicker({
             
             <div className="mt-4 pt-3 flex items-center justify-between border-t" style={{ borderColor: border }}>
               <button type="button" onClick={() => { onChange(null); setIsOpen(false); }} className="text-[11px] font-medium hover:underline" style={{ color: mut }}>
-                Clear
+                {t('common.clear')}
               </button>
               <button type="button" onClick={() => { onChange(new Date()); setIsOpen(false); }} className="text-[11px] font-medium hover:underline" style={{ color: accent }}>
-                Today
+                {t('common.today')}
               </button>
             </div>
           </motion.div>

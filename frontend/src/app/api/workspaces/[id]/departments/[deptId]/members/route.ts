@@ -106,6 +106,11 @@ export async function PUT(req: Request, ctx: Ctx) {
     }
   }
 
+  const previous = await prisma.departmentMember.findMany({
+    where: { departmentId: deptId },
+    select: { userId: true, role: true },
+  });
+
   await prisma.$transaction(async (tx) => {
     await tx.departmentMember.deleteMany({ where: { departmentId: deptId } });
     if (parsed.data.members.length) {
@@ -118,6 +123,44 @@ export async function PUT(req: Request, ctx: Ctx) {
       });
     }
   });
+
+  const { publishBoardLive } = await import("@/lib/boards-live-bus");
+  publishBoardLive({
+    type: "department.changed",
+    workspaceId,
+    departmentId: deptId,
+    reason: "members",
+  });
+
+  try {
+    const { notifyUsers } = await import("@/lib/card-permissions");
+    const prevLeads = new Set(
+      previous
+        .filter((m) => m.role === "MANAGER" || m.role === "SUPERVISOR")
+        .map((m) => m.userId),
+    );
+    const newlyLeads = parsed.data.members
+      .filter(
+        (m) =>
+          (m.role === "MANAGER" || m.role === "SUPERVISOR") &&
+          !prevLeads.has(m.userId),
+      )
+      .map((m) => m.userId);
+    if (newlyLeads.length) {
+      await notifyUsers({
+        userIds: newlyLeads,
+        workspaceId,
+        actorId: session.user.id,
+        type: "department.created",
+        title: `You were added to “${dept.name}”`,
+        body:
+          "You were added as a manager or supervisor of this department",
+        href: `/workspace/${workspaceId}/boards?view=departments`,
+      });
+    }
+  } catch (e) {
+    console.error("[department.members] notify failed", e);
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -198,7 +198,28 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   const payload = serializeChatMessage(msg, session.user.id);
-  emitToChatRoom(roomId, "chat:message", { ...payload, roomId });
+  // Broadcast without viewer-scoped isMine — each client derives from author.id
+  const { isMine: _isMine, ...broadcast } = payload;
+  emitToChatRoom(roomId, "chat:message", { ...broadcast, roomId });
+
+  if (mentionIds.length) {
+    try {
+      const { notifyUsers } = await import("@/lib/card-permissions");
+      const actor =
+        session.user.name || session.user.email || "Someone";
+      await notifyUsers({
+        userIds: mentionIds,
+        workspaceId,
+        actorId: session.user.id,
+        type: "chat.mention",
+        title: `${actor} mentioned you in chat`,
+        body: parsed.data.body.trim().slice(0, 180),
+        href: `/workspace/${workspaceId}/chat?room=${roomId}`,
+      });
+    } catch (e) {
+      console.error("[chat.mention] notify failed", e);
+    }
+  }
 
   const { publishBadgeRefresh } = await import("@/lib/badge-bus");
   publishBadgeRefresh({ workspaceId });

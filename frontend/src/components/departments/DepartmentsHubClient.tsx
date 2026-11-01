@@ -47,7 +47,7 @@ import {
   chartTooltipLabelStyle,
   chartTooltipItemStyle,
 } from '@/components/SafeDashboard/theme';
-
+import { useBoardsLive } from '@/hooks/useBoardsLive';
 type Person = {
   id: string;
   name: string | null;
@@ -109,7 +109,7 @@ function PersonChip({
   const tip = person.accessVia ? `${role}: ${label} (${person.accessVia})` : `${role}: ${label}`;
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full pl-0.5 pr-2 py-0.5 max-w-full"
+      className="inline-flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1 max-w-full"
       style={{
         background: surfaceItem(isDark),
         border: `1px solid ${borderSubtle(isDark)}`,
@@ -117,7 +117,7 @@ function PersonChip({
       title={tip}
     >
       <span
-        className="w-5 h-5 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0"
+        className="w-6 h-6 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0"
         style={{
           background: isDark ? 'var(--chip)' : '#E5E7EB',
           color: textMuted(isDark),
@@ -131,7 +131,7 @@ function PersonChip({
         )}
       </span>
       <span
-        className="text-[10px] font-semibold truncate max-w-[7rem]"
+        className="text-[11px] font-semibold truncate max-w-[9rem]"
         style={{ color: textSecondary(isDark) }}
       >
         {label}
@@ -189,8 +189,8 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [searchParams, canManage, loading, pathname, router]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/departments`);
@@ -221,13 +221,23 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, [workspaceId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useBoardsLive(workspaceId, (ev) => {
+    if (
+      ev.type === 'department.changed' ||
+      ev.type === 'board.changed' ||
+      ev.type === 'workspace.invalidate'
+    ) {
+      void load({ silent: true });
+    }
+  });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -341,11 +351,6 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
               · {pageView === 'overview' ? t('workspace.overview') : t('workspace.list')}
             </span>
           </h1>
-          <p className="text-sm mt-1" style={{ color: textSecondary(isDark) }}>
-            {pageView === 'overview'
-              ? t('departmentsPage.subtitleOverview')
-              : t('departmentsPage.subtitleList')}
-          </p>
         </div>
         <div
           className="inline-flex p-1 rounded-2xl self-start sm:self-end shrink-0"
@@ -697,7 +702,7 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
           {filtered.map((d) => (
             <div
               key={d.id}
-              className="rounded-2xl p-5 transition-all duration-200 hover:shadow-md relative"
+              className="rounded-2xl p-6 transition-all duration-200 hover:shadow-md relative"
               style={{
                 background: flatBg,
                 border: `1px solid ${cardBorder}`,
@@ -820,12 +825,12 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
                   </div>
 
                   <div
-                    className="mt-4 pt-3 space-y-2.5 border-t"
+                    className="mt-5 pt-4 space-y-3 border-t"
                     style={{ borderColor: borderSubtle(isDark) }}
                   >
-                    <div className="flex items-start gap-2 flex-wrap">
+                    <div className="flex items-start gap-2.5 flex-wrap">
                       <span
-                        className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1 inline-flex items-center gap-1 w-[4.5rem]"
+                        className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1.5 inline-flex items-center gap-1 min-w-[5.5rem]"
                         style={{ color: textMuted(isDark) }}
                       >
                         <MdSupervisorAccount size={12} /> {t('departmentsPage.labelManager')}
@@ -846,9 +851,9 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
                       )}
                     </div>
                     {d.supervisors.length > 0 && (
-                      <div className="flex items-start gap-2 flex-wrap">
+                      <div className="flex items-start gap-2.5 flex-wrap">
                         <span
-                          className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1 inline-flex items-center gap-1 w-[4.5rem]"
+                          className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1.5 inline-flex items-center gap-1 min-w-[5.5rem]"
                           style={{ color: textMuted(isDark) }}
                         >
                           <MdGroups size={12} /> {t('departmentsPage.labelLead')}
@@ -863,9 +868,9 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
                         ))}
                       </div>
                     )}
-                    <div className="flex items-start gap-2 flex-wrap">
+                    <div className="flex items-start gap-2.5 flex-wrap">
                       <span
-                        className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1 inline-flex items-center gap-1 w-[4.5rem]"
+                        className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1.5 inline-flex items-center gap-1 min-w-[5.5rem]"
                         style={{ color: textMuted(isDark) }}
                       >
                         <MdGroups size={12} /> {t('departmentsPage.labelTeam')}
@@ -916,9 +921,9 @@ export function DepartmentsHubClient({ workspaceId }: { workspaceId: string }) {
                       )}
                     </div>
                     {d.access.length > 0 && (
-                      <div className="flex items-start gap-2 flex-wrap">
+                      <div className="flex items-start gap-2.5 flex-wrap">
                         <span
-                          className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1 inline-flex items-center gap-1 w-[4.5rem]"
+                          className="text-[10px] font-bold uppercase tracking-wider shrink-0 pt-1.5 inline-flex items-center gap-1 min-w-[5.5rem]"
                           style={{ color: textMuted(isDark) }}
                         >
                           <MdVerifiedUser size={12} /> {t('departmentsPage.labelAccess')}

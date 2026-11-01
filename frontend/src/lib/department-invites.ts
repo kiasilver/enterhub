@@ -118,6 +118,22 @@ export async function shouldAutoApproveAfterAccept(opts: {
   return false;
 }
 
+/** Collect all department ids stored on an invite (primary + extras). */
+export function inviteDepartmentIds(invite: {
+  departmentId?: string | null;
+  departmentIds?: unknown;
+}): string[] {
+  const ids = new Set<string>();
+  if (invite.departmentId) ids.add(invite.departmentId);
+  if (Array.isArray(invite.departmentIds)) {
+    for (const raw of invite.departmentIds) {
+      const id = String(raw || "").trim();
+      if (id) ids.add(id);
+    }
+  }
+  return Array.from(ids);
+}
+
 /** Activate workspace + department membership from an invite. */
 export async function activateInviteMembership(inviteId: string, approvedById: string) {
   const invite = await prisma.workspaceInvite.findUnique({
@@ -126,6 +142,8 @@ export async function activateInviteMembership(inviteId: string, approvedById: s
   if (!invite || !invite.inviteeUserId) {
     throw new Error("Invite missing invitee");
   }
+
+  const deptIds = inviteDepartmentIds(invite);
 
   await prisma.$transaction(async (tx) => {
     await tx.workspaceMember.upsert({
@@ -147,16 +165,16 @@ export async function activateInviteMembership(inviteId: string, approvedById: s
       },
     });
 
-    if (invite.departmentId) {
+    for (const departmentId of deptIds) {
       await tx.departmentMember.upsert({
         where: {
           departmentId_userId: {
-            departmentId: invite.departmentId,
+            departmentId,
             userId: invite.inviteeUserId!,
           },
         },
         create: {
-          departmentId: invite.departmentId,
+          departmentId,
           userId: invite.inviteeUserId!,
           role: invite.departmentRole,
         },
@@ -170,6 +188,7 @@ export async function activateInviteMembership(inviteId: string, approvedById: s
         status: "ACCEPTED",
         approvedById,
         approvedAt: new Date(),
+        acceptedAt: invite.acceptedAt || new Date(),
       },
     });
   });

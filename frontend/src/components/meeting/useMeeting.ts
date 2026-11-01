@@ -22,6 +22,13 @@ type SignalPayload =
   | { type: 'answer'; sdp: RTCSessionDescriptionInit }
   | { type: 'ice'; candidate: RTCIceCandidateInit };
 
+function isScreenTrack(track: MediaStreamTrack) {
+  if (track.kind !== 'video') return false;
+  const surface = track.getSettings().displaySurface;
+  if (surface) return true;
+  return /screen|window|tab|display|monitor|webcontents/i.test(track.label || '');
+}
+
 const ICE: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -44,6 +51,7 @@ export function useMeeting({
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [peers, setPeers] = useState<MeetingPeerMeta[]>([]);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Record<string, MediaStream>>({});
   const [audioOn, setAudioOn] = useState(true);
   const [videoOn, setVideoOn] = useState(false); // default video OFF
   const [sharing, setSharing] = useState(false);
@@ -71,6 +79,11 @@ export function useMeeting({
       delete next[socketId];
       return next;
     });
+    setRemoteScreenStreams((prev) => {
+      const next = { ...prev };
+      delete next[socketId];
+      return next;
+    });
   }, []);
 
   const createPeer = useCallback(
@@ -92,8 +105,20 @@ export function useMeeting({
       }
 
       pc.ontrack = (ev) => {
-        const [streamIn] = ev.streams;
-        if (streamIn) upsertRemote(remoteId, streamIn);
+        const track = ev.track;
+        const streamIn = ev.streams[0] || new MediaStream([track]);
+        if (isScreenTrack(track)) {
+          setRemoteScreenStreams((prev) => ({ ...prev, [remoteId]: streamIn }));
+          track.addEventListener('ended', () => {
+            setRemoteScreenStreams((prev) => {
+              const next = { ...prev };
+              if (next[remoteId] === streamIn) delete next[remoteId];
+              return next;
+            });
+          });
+          return;
+        }
+        upsertRemote(remoteId, streamIn);
       };
 
       pc.onicecandidate = (ev) => {
@@ -204,13 +229,23 @@ export function useMeeting({
       const wantAudio = opts?.audio !== false;
       const wantVideo = !!opts?.video;
       if (wantAudio || wantVideo) {
-        await ensureLocalMedia(wantAudio, wantVideo);
+        try {
+          await ensureLocalMedia(wantAudio, wantVideo);
+        } catch {
+          if (wantVideo) {
+            try {
+              await ensureLocalMedia(wantAudio, false);
+            } catch {
+              /* join without media so signaling still works */
+            }
+          }
+        }
         if (!wantAudio && localStreamRef.current) {
           for (const t of localStreamRef.current.getAudioTracks()) t.enabled = false;
         }
       }
-      setAudioOn(wantAudio);
-      setVideoOn(wantVideo);
+      setAudioOn(!!localStreamRef.current?.getAudioTracks().some((t) => t.enabled));
+      setVideoOn(!!localStreamRef.current?.getVideoTracks().some((t) => t.enabled && t.readyState === 'live'));
       setJoined(true);
       socket.emit('meeting:join', {
         meetingId,
@@ -232,6 +267,7 @@ export function useMeeting({
     setScreenStream(null);
     setPeers([]);
     setRemoteStreams({});
+    setRemoteScreenStreams({});
     setSharing(false);
     setJoined(false);
   }, [socket, meetingId]);
@@ -326,11 +362,16 @@ export function useMeeting({
       );
     };
 
+    const onFull = () => {
+      setError('MEETING_FULL');
+    };
+
     socket.on('meeting:peers', onPeers);
     socket.on('meeting:peer-joined', onJoined);
     socket.on('meeting:peer-left', onLeft);
     socket.on('meeting:signal', onSignal);
     socket.on('meeting:state', onState);
+    socket.on('meeting:full', onFull);
 
     return () => {
       socket.off('meeting:peers', onPeers);
@@ -338,6 +379,7 @@ export function useMeeting({
       socket.off('meeting:peer-left', onLeft);
       socket.off('meeting:signal', onSignal);
       socket.off('meeting:state', onState);
+      socket.off('meeting:full', onFull);
     };
   }, [socket, enabled, joined, createPeer, removePeer, meetingId]);
 
@@ -431,55 +473,74 @@ export function useMeeting({
     setVideoOn(next);
   }, [videoOn, audioOn, ensureLocalMedia, renegotiate]);
 
-  const stopScreenShare = useCallback(() => {
-    const ss = screenRef.current;
-    const hadShare = !!ss;
-    if (ss) {
-      for (const track of ss.getTracks()) {
-        track.stop();
-        for (const [, pc] of pcs.current) {
-          for (const sender of pc.getSenders()) {
-            if (sender.track?.id === track.id) {
-              try {
-                pc.removeTrack(sender);
-              } catch {
-                /* ignore */
-              }
-            }
+  const applyVideoTrack = useCallback(
+    async (track: MediaStreamTrack | null, stream: MediaStream | null) => {
+      let added = false;
+      for (const [, pc] of pcs.current) {
+        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+        if (sender) {
+          try {
+            await sender.replaceTrack(track);
+          } catch {
+            /* ignore */
           }
+        } else if (track && stream) {
+          pc.addTrack(track, stream);
+          added = true;
         }
       }
+      if (added) await renegotiate();
+    },
+    [renegotiate],
+  );
+
+  const stopScreenShare = useCallback(() => {
+    const ss = screenRef.current;
+    if (ss) {
+      for (const track of ss.getTracks()) track.stop();
     }
     screenRef.current = null;
     setScreenStream(null);
     setSharing(false);
-    if (hadShare) void renegotiate();
-  }, [renegotiate]);
+    const cam =
+      (videoOn
+        ? localStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live')
+        : null) || null;
+    void applyVideoTrack(cam, localStreamRef.current);
+  }, [applyVideoTrack, videoOn]);
 
   const startScreenShare = useCallback(
     async (q: ScreenShareQuality = quality) => {
       try {
         const display = await navigator.mediaDevices.getDisplayMedia({
           video: SCREEN_SHARE_CONSTRAINTS[q],
-          audio: true,
+          audio: false,
         });
-        stopScreenShare();
+        const screenTrack = display.getVideoTracks()[0];
+        if (!screenTrack) {
+          display.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        try {
+          screenTrack.contentHint = 'detail';
+        } catch {
+          /* ignore */
+        }
+        if (screenRef.current) {
+          screenRef.current.getTracks().forEach((t) => t.stop());
+        }
         screenRef.current = display;
-        setScreenStream(display);
+        setScreenStream(new MediaStream(display.getTracks()));
         setSharing(true);
         setQuality(q);
-        for (const track of display.getTracks()) {
-          for (const [, pc] of pcs.current) {
-            pc.addTrack(track, display);
-          }
-          track.onended = () => stopScreenShare();
-        }
-        await renegotiate();
+        setError(null);
+        screenTrack.onended = () => stopScreenShare();
+        await applyVideoTrack(screenTrack, display);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Screen share cancelled');
       }
     },
-    [quality, stopScreenShare, renegotiate],
+    [quality, stopScreenShare, applyVideoTrack],
   );
 
   const changeQuality = useCallback(
@@ -504,6 +565,7 @@ export function useMeeting({
     screenStream,
     peers,
     remoteStreams,
+    remoteScreenStreams,
     audioOn,
     videoOn,
     sharing,

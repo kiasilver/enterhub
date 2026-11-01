@@ -353,8 +353,79 @@ export async function POST(req: Request, ctx: Ctx) {
         })),
       });
     }
+    await tx.board.create({
+      data: {
+        workspaceId,
+        departmentId: created.id,
+        name: "General",
+        description: "Default inbox for this department",
+        visibility: "WORKSPACE",
+        isGeneral: true,
+        lists: {
+          create: [
+            { title: "To Do", order: 0 },
+            { title: "In Progress", order: 1 },
+            { title: "On Review", order: 2 },
+            { title: "Done", order: 3 },
+          ],
+        },
+      },
+    });
     return created;
   });
+
+  const { publishBoardLive } = await import("@/lib/boards-live-bus");
+  publishBoardLive({
+    type: "department.changed",
+    workspaceId,
+    departmentId: dept.id,
+    reason: "created",
+  });
+
+  // Notify workspace managers + designated department managers
+  try {
+    const { notifyUsers } = await import("@/lib/card-permissions");
+    const managerIds = new Set<string>();
+    for (const m of members) {
+      if (m.role === "MANAGER" || m.role === "SUPERVISOR") {
+        managerIds.add(m.userId);
+      }
+    }
+    const admins = await prisma.workspaceMember.findMany({
+      where: {
+        workspaceId,
+        status: "ACTIVE",
+        role: {
+          OR: [
+            { name: { in: ["OWNER", "ORG_ADMIN"] } },
+            {
+              permissions: {
+                some: {
+                  permission: { actionName: "department:manage" },
+                },
+              },
+            },
+          ],
+        },
+      },
+      select: { userId: true },
+      take: 50,
+    });
+    for (const a of admins) managerIds.add(a.userId);
+    if (managerIds.size) {
+      await notifyUsers({
+        userIds: [...managerIds],
+        workspaceId,
+        actorId: session.user.id,
+        type: "department.created",
+        title: `Department “${dept.name}” created`,
+        body: "A new department was added to the workspace",
+        href: `/workspace/${workspaceId}/boards?view=departments`,
+      });
+    }
+  } catch (e) {
+    console.error("[department.created] notify failed", e);
+  }
 
   return NextResponse.json({ data: dept }, { status: 201 });
 }

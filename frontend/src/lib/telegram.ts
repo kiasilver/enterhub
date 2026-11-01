@@ -1,62 +1,99 @@
 /**
- * Send a Telegram message when prefs + bot token are configured.
- * No-op when TELEGRAM_BOT_TOKEN is missing.
+ * Optional Telegram delivery for notifications.
+ * Prefer TELEGRAM_BOT_TOKEN + per-user telegramChatId in UserNotificationPrefs.
+ * Falls back to TELEGRAM_CHAT_ID (single ops chat) when set.
  */
+
+import { prisma } from "@/lib/prisma";
+import {
+  DEFAULT_CHANNEL_PREFS,
+  mergeChannelPrefs,
+  type ChannelPref,
+  type NotificationEventKey,
+} from "@/lib/notification-prefs";
+
+export type { ChannelPref };
+
+/** @deprecated use DEFAULT_CHANNEL_PREFS — kept for callers */
+export const DEFAULT_CHANNELS = DEFAULT_CHANNEL_PREFS;
+
+export function mergeChannels(raw: unknown): Record<string, ChannelPref> {
+  return mergeChannelPrefs(raw);
+}
+
+async function getBotToken(): Promise<string | null> {
+  return process.env.TELEGRAM_BOT_TOKEN?.trim() || null;
+}
+
 export async function sendTelegramMessage(
   chatId: string,
   text: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    return { ok: false, error: 'TELEGRAM_BOT_TOKEN not configured' };
-  }
-  if (!chatId.trim()) {
-    return { ok: false, error: 'Missing chat id' };
-  }
-
+): Promise<boolean> {
+  const token = await getBotToken();
+  if (!token || !chatId) return false;
   try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text.slice(0, 3900),
-        disable_web_page_preview: true,
-      }),
-    });
-    const json = (await res.json()) as { ok?: boolean; description?: string };
-    if (!res.ok || !json.ok) {
-      return { ok: false, error: json.description || 'Telegram API error' };
-    }
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'Telegram failed' };
+    const res = await fetch(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: text.slice(0, 4000),
+          disable_web_page_preview: true,
+        }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
-export type NotifChannelKey = 'chatMention' | 'letter' | 'mail' | 'assignment';
-
-export type ChannelPref = { inApp: boolean; telegram: boolean; email: boolean };
-
-export const DEFAULT_CHANNELS: Record<NotifChannelKey, ChannelPref> = {
-  chatMention: { inApp: true, telegram: false, email: true },
-  letter: { inApp: true, telegram: false, email: true },
-  mail: { inApp: true, telegram: false, email: true },
-  assignment: { inApp: true, telegram: false, email: true },
+type NotifyPayload = {
+  type: string;
+  title: string;
+  body?: string | null;
+  link?: string | null;
 };
 
-export function mergeChannels(raw: unknown): Record<NotifChannelKey, ChannelPref> {
-  const base = { ...DEFAULT_CHANNELS };
-  if (!raw || typeof raw !== 'object') return base;
-  for (const key of Object.keys(DEFAULT_CHANNELS) as NotifChannelKey[]) {
-    const v = (raw as Record<string, Partial<ChannelPref>>)[key];
-    if (v && typeof v === 'object') {
-      base[key] = {
-        inApp: v.inApp ?? base[key].inApp,
-        telegram: v.telegram ?? base[key].telegram,
-        email: v.email ?? base[key].email,
-      };
-    }
-  }
-  return base;
+export async function deliverTelegramForUsers(
+  userIds: string[],
+  payload: NotifyPayload,
+): Promise<void> {
+  const unique = [...new Set(userIds.filter(Boolean))];
+  if (!unique.length) return;
+  const token = await getBotToken();
+  if (!token) return;
+
+  const prefs = await prisma.userNotificationPrefs.findMany({
+    where: { userId: { in: unique } },
+  });
+  const byUser = new Map(prefs.map((p) => [p.userId, p]));
+
+  const channelKey = (payload.type || "") as NotificationEventKey | string;
+  const fallbackChat = process.env.TELEGRAM_CHAT_ID?.trim() || null;
+
+  await Promise.all(
+    unique.map(async (uid) => {
+      const row = byUser.get(uid);
+      if (!row?.telegramEnabled) return;
+      const channels = mergeChannelPrefs(row.channels);
+      const key = (
+        channelKey in channels ? channelKey : "assignment"
+      ) as NotificationEventKey;
+      const ch = channels[key] ?? channels.assignment;
+      if (!ch?.telegram) return;
+      const chatId = row.telegramChatId?.trim() || fallbackChat;
+      if (!chatId) return;
+      const text = [
+        `Enterhub · ${payload.title}`,
+        payload.body || "",
+        payload.link || "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      await sendTelegramMessage(chatId, text);
+    }),
+  );
 }

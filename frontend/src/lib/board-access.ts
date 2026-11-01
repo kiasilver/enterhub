@@ -16,7 +16,7 @@ export function isDoneListTitle(title: string): boolean {
 }
 
 export function isReviewListTitle(title: string): boolean {
-  return /(review|qa|test|ready for review)/i.test(title);
+  return /(on review|review|approval|pending|qa|test|بررسی)/i.test(title);
 }
 
 export { isBoardDepartmentSupervisor };
@@ -189,4 +189,19 @@ export function guestCanMoveCards(_level: GuestAccessLevel): boolean {
 /** Guests must never create/rename/delete lists or change board structure */
 export function guestCanMutateBoardStructure(_level?: GuestAccessLevel): boolean {
   return false;
+}
+
+/** Settings / department leads can manage observers on a board. */
+export async function canManageBoardGuests(
+  userId: string,
+  boardId: string,
+): Promise<boolean> {
+  const board = await prisma.board.findUnique({
+    where: { id: boardId },
+    select: { workspaceId: true },
+  });
+  if (!board) return false;
+  if (await hasPermission(userId, board.workspaceId, "board:invite_guest")) return true;
+  if (await hasPermission(userId, board.workspaceId, "board:settings")) return true;
+  return isBoardDepartmentSupervisor(userId, boardId);
 }

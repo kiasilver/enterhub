@@ -108,3 +108,77 @@ export async function POST(req: Request, ctx: Ctx) {
 
   return NextResponse.json({ data: comment }, { status: 201 });
 }
+
+/** PATCH /api/boards/[id]/cards/[cardId]/comments — body: { commentId, body } */
+export async function PATCH(req: Request, ctx: Ctx) {
+  const { session, error } = await assertWritableSession();
+  if (error) return error;
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { id: boardId, cardId } = await ctx.params;
+  const access = await canAccessBoard(session.user.id, boardId);
+  if (!access.ok) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const body = z
+    .object({
+      commentId: z.string().min(1),
+      body: z.string().min(1).max(5000),
+    })
+    .safeParse(await req.json().catch(() => null));
+  if (!body.success) {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+  }
+
+  const existing = await prisma.comment.findFirst({
+    where: { id: body.data.commentId, cardId },
+  });
+  if (!existing) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (existing.authorId !== session.user.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const comment = await prisma.comment.update({
+    where: { id: existing.id },
+    data: { body: body.data.body.trim() },
+    include: { author: { select: { id: true, name: true, email: true } } },
+  });
+
+  return NextResponse.json({ data: comment });
+}
+
+/** DELETE /api/boards/[id]/cards/[cardId]/comments?commentId= */
+export async function DELETE(req: Request, ctx: Ctx) {
+  const { session, error } = await assertWritableSession();
+  if (error) return error;
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { id: boardId, cardId } = await ctx.params;
+  const access = await canAccessBoard(session.user.id, boardId);
+  if (!access.ok) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const commentId = new URL(req.url).searchParams.get("commentId");
+  if (!commentId) {
+    return NextResponse.json({ error: "commentId required" }, { status: 400 });
+  }
+
+  const existing = await prisma.comment.findFirst({
+    where: { id: commentId, cardId },
+  });
+  if (!existing) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (existing.authorId !== session.user.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  await prisma.comment.delete({ where: { id: existing.id } });
+  return NextResponse.json({ ok: true });
+}

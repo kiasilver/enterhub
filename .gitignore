@@ -22,3 +22,7 @@
 # OS files
 .DS_Store
 
+
+# Runtime / local
+app.log
+frontend/public/uploads/

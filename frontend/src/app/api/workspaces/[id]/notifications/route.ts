@@ -96,5 +96,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
     data: { readAt: new Date() },
   });
 
+  const { publishBadgeRefresh } = await import("@/lib/badge-bus");
+  publishBadgeRefresh({ workspaceId, userId: session.user.id });
+
   return NextResponse.json({ data: { ok: true } });
 }

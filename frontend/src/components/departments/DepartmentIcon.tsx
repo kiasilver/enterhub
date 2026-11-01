@@ -39,6 +39,7 @@ export function DepartmentIcon({
   return (
     <span
       className={`${cls} ${className}`.trim()}
+      dir="ltr"
       style={{
         fontSize: size,
         lineHeight: 1,
@@ -48,6 +49,9 @@ export function DepartmentIcon({
         alignItems: 'center',
         justifyContent: 'center',
         userSelect: 'none',
+        overflow: 'hidden',
+        unicodeBidi: 'isolate',
+        letterSpacing: 0,
         ...style,
       }}
       aria-hidden

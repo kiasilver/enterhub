@@ -9,7 +9,10 @@ import { textPrimary,
   textSecondary,
   textMuted,
   borderSubtle,
-  surfaceItem, panelFill } from '@/components/SafeDashboard/theme';
+  surfaceItem } from '@/components/SafeDashboard/theme';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
+import { localizeListTitle, localizeWorkflowStatus } from '@/lib/list-i18n';
 
 export default function DepartmentTaskList({
   data,
@@ -20,6 +23,8 @@ export default function DepartmentTaskList({
   isDark: boolean;
   onReload: () => void | Promise<void>;
 }) {
+  const { t } = useLang();
+  const { formatDate } = useCalendar();
   const [q, setQ] = useState('');
   const [detail, setDetail] = useState<{ boardId: string; cardId: string } | null>(
     null,
@@ -51,14 +56,14 @@ export default function DepartmentTaskList({
       <div className="relative max-w-md">
         <MdSearch
           size={18}
-          className="absolute left-3 top-1/2 -translate-y-1/2"
+          className="absolute start-3 top-1/2 -translate-y-1/2"
           style={{ color: textMuted(isDark) }}
         />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search tasks…"
-          className="w-full pl-9 pr-3 py-2.5 rounded-xl text-sm outline-none"
+          placeholder={t('departmentsPage.searchTasks')}
+          className="w-full ps-9 pe-3 py-2.5 rounded-xl text-sm outline-none text-start"
           style={{
             background: cardBg,
             border: `1px solid ${borderSubtle(isDark)}`,
@@ -78,11 +83,11 @@ export default function DepartmentTaskList({
             borderBottom: `1px solid ${borderSubtle(isDark)}`,
           }}
         >
-          <span className="col-span-4">Task</span>
-          <span className="col-span-2">Project</span>
-          <span className="col-span-2">Status</span>
-          <span className="col-span-2">Due</span>
-          <span className="col-span-2">Timer</span>
+          <span className="col-span-4">{t('departmentsPage.colTask')}</span>
+          <span className="col-span-2">{t('departmentsPage.colProject')}</span>
+          <span className="col-span-2">{t('departmentsPage.colStatus')}</span>
+          <span className="col-span-2">{t('departmentsPage.colDue')}</span>
+          <span className="col-span-2">{t('departmentsPage.colTimer')}</span>
         </div>
         <ul>
           {rows.map((c) => (
@@ -90,7 +95,7 @@ export default function DepartmentTaskList({
               <button
                 type="button"
                 onClick={() => setDetail({ boardId: c.projectId, cardId: c.id })}
-                className="w-full text-left px-4 py-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center hover:opacity-95"
+                className="w-full text-start px-4 py-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center hover:opacity-95"
                 style={{
                   borderBottom: `1px solid ${borderSubtle(isDark)}`,
                   background: surfaceItem(isDark),
@@ -104,7 +109,7 @@ export default function DepartmentTaskList({
                     {c.title}
                   </span>
                   <span className="text-[10px]" style={{ color: textMuted(isDark) }}>
-                    {c.listTitle}
+                    {localizeListTitle(c.listTitle, t)}
                     {c.checklist.total > 0
                       ? ` · ${c.checklist.done}/${c.checklist.total}`
                       : ''}
@@ -117,15 +122,10 @@ export default function DepartmentTaskList({
                   {c.projectName}
                 </span>
                 <span className="sm:col-span-2 text-xs font-medium" style={{ color: textSecondary(isDark) }}>
-                  {c.workflowStatus.replace(/_/g, ' ')}
+                  {localizeWorkflowStatus(c.workflowStatus, t)}
                 </span>
                 <span className="sm:col-span-2 text-xs tabular-nums" style={{ color: textMuted(isDark) }}>
-                  {c.dueDate
-                    ? new Date(c.dueDate).toLocaleDateString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                      })
-                    : '—'}
+                  {c.dueDate ? formatDate(c.dueDate, 'short') : '—'}
                 </span>
                 <span className="sm:col-span-2">
                   <WorkTimerBadge
@@ -139,7 +139,7 @@ export default function DepartmentTaskList({
           ))}
           {rows.length === 0 && (
             <li className="text-sm text-center py-12" style={{ color: textMuted(isDark) }}>
-              No tasks found
+              {t('common.noResults')}
             </li>
           )}
         </ul>

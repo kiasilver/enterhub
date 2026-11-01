@@ -40,13 +40,15 @@ import {
   surfaceItem,
   glassStyle,
   panelFill,
-  bubbleFill,
   hexToRgba,
   searchFieldBg,
   selectedFill,
   canvasBg,
 } from '@/components/SafeDashboard/theme';
-import { MeetingOverlay } from '@/components/meeting/MeetingOverlay';
+import {
+  MessageReactionBar,
+  rememberReaction,
+} from '@/components/chat/MessageReactionBar';
 import {
   ACCENT,
   REACTION_EMOJIS,
@@ -61,6 +63,8 @@ import {
   type TeamMember,
 } from '@/components/chat/chat-types';
 import { isPresenceStatus, toChatPresence } from '@/lib/presence';
+import { useMeetingCall } from '@/components/meeting/MeetingCallProvider';
+import { groupMeetingIdForRoom } from '@/lib/meeting-pair';
 
 function PresenceDot({
   status,
@@ -169,15 +173,25 @@ type EntityMention = {
 };
 
 export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
-  const { theme } = useTheme();
+  const { theme, primaryColor } = useTheme();
   const { t: tx, lang, dir } = useLang();
   const isDark = theme === 'dark';
   const { data: session } = useSession();
   const myId = session?.user?.id || '';
-  const myName = session?.user?.name || session?.user?.email || 'Me';
+  const myName = session?.user?.name || session?.user?.email || tx('chat.me');
   const searchParams = useSearchParams();
   const roomFromUrl = searchParams.get('room');
-  const meetFromUrl = searchParams.get('meet') === '1';
+  const meetFromUrl = searchParams.get('meet');
+  const {
+    inCall,
+    kind: callKind,
+    partner: callPartner,
+    groupTitle,
+    roomId: callRoomId,
+    startCall,
+    startGroupCall,
+    stage: callStage,
+  } = useMeetingCall();
 
   const [tab, setTab] = useState<ChatTab>('chats');
   const [query, setQuery] = useState('');
@@ -222,15 +236,18 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
   const [typingName, setTypingName] = useState<string | null>(null);
   const [mobileShowThread, setMobileShowThread] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [meetingOpen, setMeetingOpen] = useState(false);
-  const [meetingAllowed, setMeetingAllowed] = useState<boolean | null>(null);
-  const [meetingUpgradeHint, setMeetingUpgradeHint] = useState<string | null>(null);
-  const [socketLive, setSocketLive] = useState<Socket | null>(null);
+  const [groupPickOpen, setGroupPickOpen] = useState(false);
+  const [groupPickIds, setGroupPickIds] = useState<string[]>([]);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeIdRef = useRef<string | null>(activeId);
+  const tabRef = useRef(tab);
+  const readDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  activeIdRef.current = activeId;
+  tabRef.current = tab;
 
   const glass = glassStyle(isDark);
   const railBg = canvasBg(isDark);
@@ -240,7 +257,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
     const text = await res.text();
     const json = text ? JSON.parse(text) : {};
     if (!res.ok) {
-      setError(json.error || 'Failed to load chats');
+      setError(json.error || tx('common.loadFailed'));
       return;
     }
     setRooms(json.data || []);
@@ -266,7 +283,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       const text = await res.text();
       const json = text ? JSON.parse(text) : {};
       if (!res.ok) {
-        setError(json.error || 'Failed to load messages');
+        setError(json.error || tx('common.loadFailed'));
         return;
       }
       setMessages(json.data || []);
@@ -319,9 +336,8 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
   }, [messages.length]);
 
   useEffect(() => {
-    const socket = io({ path: '/socket.io' });
+    const socket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
     socketRef.current = socket;
-    setSocketLive(socket);
     socket.emit('workspace:join', { workspaceId });
     const stored =
       typeof window !== 'undefined'
@@ -351,7 +367,8 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       },
     );
     socket.on('chat:message', (msg: ChatMsg & { roomId?: string }) => {
-      if (!msg.roomId || msg.roomId !== activeId) {
+      const currentRoom = activeIdRef.current;
+      if (!msg.roomId || msg.roomId !== currentRoom) {
         if (msg.roomId) {
           setRooms((prev) =>
             prev.map((r) =>
@@ -370,10 +387,16 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
               ...prev,
               {
                 ...msg,
-                isMine: msg.isMine || (!!myId && msg.author?.id === myId),
+                isMine: !!(myId && msg.author?.id === myId),
               },
             ],
       );
+      if (readDebounceRef.current) clearTimeout(readDebounceRef.current);
+      readDebounceRef.current = setTimeout(() => {
+        void fetch(`/api/workspaces/${workspaceId}/chat/rooms/${msg.roomId}/read`, {
+          method: 'POST',
+        }).catch(() => undefined);
+      }, 400);
     });
     socket.on(
       'chat:reaction',
@@ -382,7 +405,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         roomId: string;
         reactions: ChatMsg['reactions'];
       }) => {
-        if (p.roomId !== activeId) return;
+        if (p.roomId !== activeIdRef.current) return;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === p.messageId
@@ -399,20 +422,20 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       },
     );
     socket.on('chat:typing', (p: { roomId: string; name?: string; userId?: string }) => {
-      if (p.roomId !== activeId || p.userId === myId) return;
-      setTypingName(p.name || 'Someone');
+      if (p.roomId !== activeIdRef.current || p.userId === myId) return;
+      setTypingName(p.name || tx('chat.someone'));
       if (typingTimer.current) clearTimeout(typingTimer.current);
       typingTimer.current = setTimeout(() => setTypingName(null), 2000);
     });
     socket.on('letter:new', () => {
-      if (tab === 'letters') void loadLetters();
+      if (tabRef.current === 'letters') void loadLetters();
     });
     return () => {
       socket.disconnect();
       socketRef.current = null;
-      setSocketLive(null);
+      if (readDebounceRef.current) clearTimeout(readDebounceRef.current);
     };
-  }, [workspaceId, activeId, myId, tab, loadLetters]);
+  }, [workspaceId, myId, loadLetters, tx]);
 
   useEffect(() => {
     if (!activeId || !socketRef.current) return;
@@ -421,43 +444,6 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       socketRef.current?.emit('chat:leave', { roomId: activeId });
     };
   }, [activeId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/meetings/access`);
-        const json = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok && json.data) {
-          setMeetingAllowed(!!json.data.allowed);
-          setMeetingUpgradeHint(json.data.upgradeHint || null);
-        } else {
-          setMeetingAllowed(false);
-          setMeetingUpgradeHint(json.error || 'Unable to check meeting access');
-        }
-      } catch {
-        if (!cancelled) {
-          setMeetingAllowed(false);
-          setMeetingUpgradeHint('Unable to check meeting access');
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  useEffect(() => {
-    if (meetFromUrl && activeId) {
-      setMeetingOpen(true);
-      setMobileShowThread(true);
-    }
-  }, [meetFromUrl, activeId]);
-
-  const openMeeting = useCallback(() => {
-    setMeetingOpen(true);
-  }, []);
 
   const teamWithPresence = useMemo(
     () =>
@@ -504,6 +490,60 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
   const activeRoom = rooms.find((r) => r.id === activeId) || null;
   const roomAccent =
     activeRoom?.type === 'DIRECT' ? ACCENT.dm : ACCENT.channel;
+  const dmPartner =
+    activeRoom?.type === 'DIRECT'
+      ? activeRoom.members.find((m) => m.userId && m.userId !== myId) || null
+      : null;
+  const inThisCall =
+    callKind === 'group'
+      ? !!(inCall && (!callRoomId || callRoomId === activeRoom?.id))
+      : !!(inCall && dmPartner && callPartner?.id === dmPartner.userId);
+
+  function openGroupPicker(preselected?: string[]) {
+    const ids =
+      preselected?.filter((id) => id && id !== myId) ||
+      team.filter((t) => t.id !== myId).map((t) => t.id);
+    setGroupPickIds(ids);
+    setGroupPickOpen(true);
+  }
+
+  function beginGroupCall() {
+    const ids = groupPickIds.filter((id) => id && id !== myId);
+    if (ids.length < 1) {
+      setError(tx('meetingPage.needOnePerson'));
+      return;
+    }
+    const room =
+      activeRoom?.type === 'CHANNEL' &&
+      ids.every((id) => activeRoom.members.some((m) => m.userId === id))
+        ? activeRoom
+        : null;
+    startGroupCall({
+      title: room?.title || tx('meetingPage.groupMeeting'),
+      userIds: ids,
+      roomId: room?.id || null,
+      meetingId: room ? groupMeetingIdForRoom(room.id) : undefined,
+    });
+    setGroupPickOpen(false);
+    setTab('chats');
+    setMobileShowThread(true);
+    if (room) setActiveId(room.id);
+  }
+
+  useEffect(() => {
+    if (!meetFromUrl) return;
+    const dm = rooms.find(
+      (r) => r.type === 'DIRECT' && r.members.some((m) => m.userId === meetFromUrl),
+    );
+    if (dm) {
+      setActiveId(dm.id);
+      setTab('chats');
+      setMobileShowThread(true);
+      return;
+    }
+    if (rooms.length === 0) return;
+    void openDm(meetFromUrl);
+  }, [meetFromUrl, rooms]);
 
   async function openDm(userId: string) {
     setBusy(true);
@@ -514,13 +554,13 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify({ type: 'DIRECT', memberIds: [userId] }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed');
+      if (!res.ok) throw new Error(json.error || tx('common.failed'));
       await loadRooms();
       setActiveId(json.data.id);
       setTab('chats');
       setMobileShowThread(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : tx('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -540,7 +580,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed');
+      if (!res.ok) throw new Error(json.error || tx('common.failed'));
       setCreateOpen(false);
       setChannelName('');
       setChannelMembers([]);
@@ -548,7 +588,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       setActiveId(json.data.id);
       setTab('chats');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : tx('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -667,7 +707,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            body: draft.trim() || (pendingFiles.length ? '📎 Attachment' : ''),
+            body: draft.trim() || (pendingFiles.length ? `📎 ${tx('chat.attachment')}` : ''),
             replyToId: replyTo?.id || null,
             mentionIds,
             entityMentions,
@@ -677,7 +717,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       );
       const text = await res.text();
       const json = text ? JSON.parse(text) : {};
-      if (!res.ok) throw new Error(json.error || 'Send failed');
+      if (!res.ok) throw new Error(json.error || tx('common.failed'));
       setMessages((prev) =>
         prev.some((m) => m.id === json.data.id) ? prev : [...prev, json.data],
       );
@@ -689,7 +729,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
       setShowEmoji(false);
       setShowMentions(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Send failed');
+      setError(err instanceof Error ? err.message : tx('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -697,6 +737,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
 
   async function toggleReaction(messageId: string, emoji: string) {
     if (!activeId) return;
+    rememberReaction(emoji);
     await fetch(
       `/api/workspaces/${workspaceId}/chat/rooms/${activeId}/messages/${messageId}/reactions`,
       {
@@ -723,7 +764,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
 
   async function deleteMessage(messageId: string) {
     if (!activeId) return;
-    if (!confirm('Delete this message? It can be recovered for 6 days.')) return;
+    if (!confirm(tx('chat.deleteMessageConfirm'))) return;
     const res = await fetch(
       `/api/workspaces/${workspaceId}/chat/rooms/${activeId}/messages/${messageId}`,
       { method: 'DELETE' },
@@ -748,12 +789,12 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify(letterForm),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed');
+      if (!res.ok) throw new Error(json.error || tx('common.failed'));
       setComposeLetter(false);
       setLetterForm({ type: 'GENERAL', toUserId: '', subject: '', body: '' });
       await loadLetters();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : tx('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -775,7 +816,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed');
+      if (!res.ok) throw new Error(json.error || tx('common.failed'));
       setReplyLetterBody('');
       await loadLetters();
       const refreshed = await fetch(
@@ -807,7 +848,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : tx('common.failed'));
     } finally {
       setBusy(false);
     }
@@ -822,6 +863,24 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
 
   const channels = filteredRooms.filter((r) => r.type === 'CHANNEL');
   const dms = filteredRooms.filter((r) => r.type === 'DIRECT');
+
+  function letterTypeLabel(type: string) {
+    if (type === 'ADMIN') return tx('chat.letterTypeAdmin');
+    if (type === 'EXCUSE') return tx('chat.letterTypeExcuse');
+    return tx('chat.letterTypeGeneral');
+  }
+
+  function letterBoxLabel(box: 'inbox' | 'sent' | 'all') {
+    if (box === 'inbox') return tx('chat.inbox');
+    if (box === 'sent') return tx('chat.sent');
+    return tx('common.all');
+  }
+
+  function roleLabel(name: string) {
+    const key = `rolesPage.roleNames.${name}`;
+    const translated = tx(key);
+    return translated === key ? name : translated;
+  }
 
   return (
     <div
@@ -843,7 +902,8 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
         }}
       >
         <div className="p-4 space-y-3.5">
-          <div className="flex gap-1.5 p-1.5 rounded-xl" style={{ background: isDark ? 'transparent' : surfaceItem(isDark) }}>
+          <div className="flex items-center gap-1.5">
+          <div className="flex flex-1 gap-1.5 p-1.5 rounded-xl min-w-0" style={{ background: isDark ? 'transparent' : surfaceItem(isDark) }}>
             {(
               [
                 { id: 'chats' as const, label: tx('chat.chats'), color: ACCENT.channel, icon: MdChatBubble },
@@ -873,6 +933,30 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                 </button>
               );
             })}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const channelIds =
+                activeRoom?.type === 'CHANNEL'
+                  ? activeRoom.members
+                      .map((m) => m.userId)
+                      .filter((id): id is string => !!id && id !== myId)
+                  : undefined;
+              openGroupPicker(channelIds);
+            }}
+            disabled={inCall}
+            className="w-10 h-10 rounded-xl shrink-0 inline-flex items-center justify-center disabled:opacity-40"
+            style={{
+              border: `1px solid ${inCall ? primaryColor : borderSubtle(isDark)}`,
+              color: inCall ? primaryColor : textMuted(isDark),
+              background: isDark ? 'transparent' : '#fff',
+            }}
+            title={tx('meetingPage.groupCall')}
+            aria-label={tx('meetingPage.groupCall')}
+          >
+            <MdVideocam size={18} />
+          </button>
           </div>
 
           <div className="relative">
@@ -925,7 +1009,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                           setActiveId(r.id);
                           setMobileShowThread(true);
                         }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left text-sm"
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-start text-sm"
                         style={{
                           background:
                             activeId === r.id
@@ -983,7 +1067,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                             setActiveId(r.id);
                             setMobileShowThread(true);
                           }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left"
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-start"
                           style={{
                             background:
                               activeId === r.id
@@ -1037,7 +1121,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         type="button"
                         onClick={() => void openDm(t.id)}
                         disabled={busy || t.id === myId}
-                        className="w-full flex items-center gap-3 px-3.5 py-3.5 rounded-xl text-left disabled:opacity-40 transition-all duration-200"
+                        className="w-full flex items-center gap-3 px-3.5 py-3.5 rounded-xl text-start disabled:opacity-40 transition-all duration-200"
                         style={{
                           color: textPrimary(isDark),
                           border: `1px solid ${borderSubtle(isDark)}`,
@@ -1068,7 +1152,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                             className="text-[10px] truncate font-medium"
                             style={{ color: accent }}
                           >
-                            {t.role}
+                            {roleLabel(t.role)}
                             {t.deptRoles[0] ? ` · ${t.deptRoles[0]}` : ''}
                           </p>
                           {t.activeTasks > 0 && (
@@ -1103,7 +1187,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       key={b}
                       type="button"
                       onClick={() => setLetterBox(b)}
-                      className="px-2.5 py-1 rounded-lg text-[10px] font-bold capitalize"
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-bold"
                       style={{
                         background:
                           letterBox === b
@@ -1113,7 +1197,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         border: `1px solid ${letterBox === b ? borderSubtle(isDark) : 'transparent'}`,
                       }}
                     >
-                      {b}
+                      {letterBoxLabel(b)}
                     </button>
                   ),
                 )}
@@ -1121,10 +1205,10 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   <button
                     type="button"
                     onClick={() => setComposeLetter(true)}
-                    className="ml-auto px-2.5 py-1 rounded-lg text-[10px] font-bold text-white"
+                    className="ms-auto px-2.5 py-1 rounded-lg text-[10px] font-bold text-white"
                     style={{ background: ACCENT.letter }}
                   >
-                    + New letter
+                    + {tx('chat.newLetter')}
                   </button>
                 )}
               </div>
@@ -1144,7 +1228,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       <button
                         type="button"
                         onClick={() => setActiveLetter(l)}
-                        className="w-full text-left rounded-xl px-3 py-3"
+                        className="w-full text-start rounded-xl px-3 py-3"
                         style={{
                           background:
                             activeLetter?.id === l.id
@@ -1155,13 +1239,13 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       >
                         <div className="flex items-center gap-2 mb-1">
                           <span
-                            className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded"
+                            className="text-[9px] font-bold px-1.5 py-0.5 rounded"
                             style={{
                               background: hexToRgba(ACCENT.letter, 0.2),
                               color: ACCENT.letter,
                             }}
                           >
-                            {l.type}
+                            {letterTypeLabel(l.type)}
                           </span>
                           {!l.readAt && letterBox === 'inbox' && (
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
@@ -1184,7 +1268,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   ))}
                 {letters.length === 0 && (
                   <p className="text-xs text-center py-8" style={{ color: textMuted(isDark) }}>
-                    No letters yet
+                    {tx('chat.noLetters')}
                   </p>
                 )}
               </ul>
@@ -1202,7 +1286,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       setActiveId(s.room.id);
                       setMobileShowThread(true);
                     }}
-                    className="w-full text-left rounded-xl px-3 py-3"
+                    className="w-full text-start rounded-xl px-3 py-3"
                     style={{
                       background: panelFill(isDark),
                       border: `1px solid ${borderSubtle(isDark)}`,
@@ -1283,29 +1367,92 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   {activeRoom.title}
                 </h2>
                 <p className="text-[11px]" style={{ color: textMuted(isDark) }}>
-                  {activeRoom.members.length} members
-                  {typingName ? ` · ${typingName} is typing…` : ''}
+                  {tx('chat.membersCount', { n: activeRoom.members.length })}
+                  {typingName ? ` · ${tx('chat.typing', { name: typingName })}` : ''}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={openMeeting}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold shrink-0 transition-opacity hover:opacity-90"
-                style={{
-                  background: 'linear-gradient(135deg,#2563EB,#7C3AED)',
-                  color: '#fff',
-                  minHeight: 40,
-                }}
-                title="Start HD meeting"
-              >
-                <MdVideocam size={18} />
-                <span className="hidden sm:inline">Meet</span>
-              </button>
+              {dmPartner && !inThisCall && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    startCall({
+                      id: dmPartner.userId,
+                      name: dmPartner.name || activeRoom.title,
+                      avatarUrl: dmPartner.avatarUrl || null,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold shrink-0 text-white"
+                  style={{ background: primaryColor, minHeight: 40 }}
+                  title={tx('meetingPage.privateOneToOne')}
+                >
+                  <MdVideocam size={18} />
+                  <span className="hidden sm:inline">{tx('meetingPage.call')}</span>
+                </button>
+              )}
+              {activeRoom.type === 'CHANNEL' && !inThisCall && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    openGroupPicker(
+                      activeRoom.members
+                        .map((m) => m.userId)
+                        .filter((id): id is string => !!id && id !== myId),
+                    )
+                  }
+                  disabled={inCall}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold shrink-0 text-white disabled:opacity-40"
+                  style={{ background: primaryColor, minHeight: 40 }}
+                  title={tx('meetingPage.groupCall')}
+                >
+                  <MdVideocam size={18} />
+                  <span className="hidden sm:inline">{tx('meetingPage.groupCall')}</span>
+                </button>
+              )}
             </header>
 
-            <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar px-5 py-5 space-y-5" dir="ltr">
+            {inCall && !inThisCall && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (callKind === 'group') {
+                    if (callRoomId) setActiveId(callRoomId);
+                    setTab('chats');
+                    setMobileShowThread(true);
+                    return;
+                  }
+                  if (!callPartner) return;
+                  const dm = rooms.find(
+                    (r) =>
+                      r.type === 'DIRECT' &&
+                      r.members.some((m) => m.userId === callPartner.id),
+                  );
+                  if (dm) {
+                    setActiveId(dm.id);
+                    setTab('chats');
+                    setMobileShowThread(true);
+                    return;
+                  }
+                  void openDm(callPartner.id);
+                }}
+                className="mx-4 mt-3 mb-0 min-h-[40px] rounded-xl px-3 text-xs font-bold text-white"
+                style={{ background: primaryColor }}
+              >
+                {tx('meetingPage.backToCall', {
+                  name:
+                    callKind === 'group'
+                      ? groupTitle || tx('meetingPage.groupMeeting')
+                      : callPartner?.name || '',
+                })}
+              </button>
+            )}
+
+            {inThisCall && callStage ? (
+            <div className="flex-1 min-h-0">{callStage}</div>
+            ) : (
+            <>
+            <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar px-5 py-5 space-y-5">
               {filteredMessages.map((m) => {
-                const isMine = !!(m.isMine || (myId && m.author?.id === myId));
+                const isMine = !!(myId && m.author?.id === myId);
                 const role = roleByUser.get(m.author.id);
                 const parts = highlightMentions(
                   m.body,
@@ -1345,7 +1492,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                           className="text-[11px] font-bold"
                           style={{ color: textSecondary(isDark) }}
                         >
-                          {isMine ? (lang === 'fa' ? 'شما' : 'You') : m.author.name}
+                          {isMine ? tx('chat.you') : m.author.name}
                         </span>
                         {role && (
                           <span
@@ -1384,13 +1531,27 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         style={{
                           background: isMine
                             ? hexToRgba(roomAccent, isDark ? 0.45 : 0.85)
-                            : bubbleFill(isDark, false),
+                            : isDark
+                              ? 'rgba(255,255,255,0.08)'
+                              : 'rgba(15,23,42,0.06)',
+                          border: isMine
+                            ? 'none'
+                            : `1px solid ${borderSubtle(isDark)}`,
                           color: isMine ? '#fff' : textPrimary(isDark),
+                          boxShadow: isMine
+                            ? undefined
+                            : isDark
+                              ? '0 2px 10px rgba(0,0,0,0.2)'
+                              : '0 2px 8px rgba(15,23,42,0.05)',
                         }}
                         dir="auto"
+                        onDoubleClick={() => {
+                          if (!m.deletedAt) void toggleReaction(m.id, '👍');
+                        }}
+                        title={tx('chat.like')}
                       >
                         {m.deletedAt ? (
-                          <em style={{ opacity: 0.6 }}>Message deleted</em>
+                          <em style={{ opacity: 0.6 }}>{tx('chat.messageDeleted')}</em>
                         ) : (
                           <p className="whitespace-pre-wrap break-words">
                             {parts.map((p, i) => {
@@ -1494,38 +1655,18 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       <div
                         className={`flex flex-wrap items-center gap-1.5 mt-0.5 px-0.5 ${isMine ? 'justify-end' : ''}`}
                       >
-                        {m.reactions.map((r) => (
-                          <button
-                            key={r.emoji}
-                            type="button"
-                            onClick={() => void toggleReaction(m.id, r.emoji)}
-                            className="text-[11px] px-2 py-1 rounded-full"
-                            style={{
-                              background: r.reactedByMe
-                                ? hexToRgba(roomAccent, 0.25)
-                                : surfaceItem(isDark),
-                              border: `1px solid ${borderSubtle(isDark)}`,
-                            }}
-                          >
-                            {r.emoji} {r.count}
-                          </button>
-                        ))}
-                        <div className="flex gap-1 opacity-70 hover:opacity-100">
-                          {REACTION_EMOJIS.slice(0, 4).map((emoji) => (
-                            <button
-                              key={emoji}
-                              type="button"
-                              className="text-[11px] px-1.5 py-0.5 rounded"
-                              onClick={() => void toggleReaction(m.id, emoji)}
-                            >
-                              {emoji}
-                            </button>
-                          ))}
+                        <MessageReactionBar
+                          reactions={m.reactions}
+                          isDark={isDark}
+                          accent={roomAccent}
+                          onReact={(emoji) => void toggleReaction(m.id, emoji)}
+                        />
+                        <div className="flex gap-1">
                           <button
                             type="button"
                             className="p-1 rounded"
                             style={{ color: textMuted(isDark) }}
-                            title="Reply"
+                            title={tx('common.reply')}
                             onClick={() => setReplyTo(m)}
                           >
                             <MdReply size={14} />
@@ -1534,7 +1675,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                             type="button"
                             className="p-1 rounded"
                             style={{ color: m.isSaved ? ACCENT.saved : textMuted(isDark) }}
-                            title="Save"
+                            title={tx('common.save')}
                             onClick={() => void toggleSave(m)}
                           >
                             {m.isSaved ? (
@@ -1548,7 +1689,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                               type="button"
                               className="p-1 rounded"
                               style={{ color: textMuted(isDark) }}
-                              title="Delete"
+                              title={tx('common.delete')}
                               onClick={() => void deleteMessage(m.id)}
                             >
                               <MdDeleteOutline size={14} />
@@ -1579,7 +1720,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   }}
                 >
                   <MdReply size={14} />
-                  Replying to {replyTo.author.name}
+                  {tx('chat.replyingTo', { name: replyTo.author.name })}
                   <button type="button" className="ml-auto" onClick={() => setReplyTo(null)}>
                     <MdClose size={14} />
                   </button>
@@ -1621,14 +1762,14 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         className="text-[9px] font-bold uppercase px-1 mb-1"
                         style={{ color: ACCENT.dm }}
                       >
-                        People
+                        {tx('chat.mentionPeople')}
                       </p>
                       <ul>
                         {suggests.people.map((t) => (
                           <li key={`u-${t.id}`}>
                             <button
                               type="button"
-                              className="w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
+                              className="w-full text-start px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
                               style={{ color: textPrimary(isDark) }}
                               onClick={() => insertEntityMention(t)}
                             >
@@ -1646,7 +1787,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                       className="text-[9px] font-bold uppercase px-1 mb-1"
                       style={{ color: ACCENT.channel }}
                     >
-                      Projects
+                      {tx('chat.mentionProjects')}
                     </p>
                     <ul>
                       {suggests.projects.length === 0 ? (
@@ -1654,14 +1795,14 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                           className="px-2 py-1 text-[11px]"
                           style={{ color: textMuted(isDark) }}
                         >
-                          No projects
+                          {tx('chat.noProjects')}
                         </li>
                       ) : (
                         suggests.projects.map((t) => (
                           <li key={`b-${t.id}`}>
                             <button
                               type="button"
-                              className="w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
+                              className="w-full text-start px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
                               style={{ color: textPrimary(isDark) }}
                               onClick={() => insertEntityMention(t)}
                             >
@@ -1679,7 +1820,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         className="text-[9px] font-bold uppercase px-1 mb-1"
                         style={{ color: ACCENT.letter }}
                       >
-                        Files
+                        {tx('chat.mentionFiles')}
                       </p>
                       <ul>
                         {suggests.files.length === 0 ? (
@@ -1687,14 +1828,14 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                             className="px-2 py-1 text-[11px]"
                             style={{ color: textMuted(isDark) }}
                           >
-                            No files in gallery
+                            {tx('chat.noFiles')}
                           </li>
                         ) : (
                           suggests.files.map((t) => (
                             <li key={`f-${t.id}`}>
                               <button
                                 type="button"
-                                className="w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
+                                className="w-full text-start px-2 py-1.5 rounded-lg text-xs flex items-center gap-2"
                                 style={{ color: textPrimary(isDark) }}
                                 onClick={() => insertEntityMention(t)}
                               >
@@ -1750,7 +1891,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     color: textSecondary(isDark),
                   }}
                   onClick={() => fileRef.current?.click()}
-                  title="Attach file"
+                  title={tx('chat.attachFile')}
                 >
                   <MdAttachFile size={18} />
                 </button>
@@ -1767,7 +1908,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   onChange={(e) => onDraftChange(e.target.value)}
                   onKeyDown={onComposerKey}
                   rows={1}
-                  placeholder={lang === 'fa' ? 'پیام…  @ افراد/فایل · # پروژه' : 'Message…  @ people/files · # projects'}
+                  placeholder={tx('chat.typeMessageHint')}
                   className="flex-1 resize-none rounded-xl px-3 py-2.5 text-sm outline-none max-h-28"
                   style={{
                     background: searchFieldBg(isDark),
@@ -1786,14 +1927,18 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
               </form>
               {error && <p className="text-xs text-red-500">{error}</p>}
             </footer>
+            </>
+            )}
           </>
         )}
 
-        {tab === 'chats' && !activeRoom && (
+        {tab === 'chats' && !activeRoom && inCall && callKind === 'group' && callStage ? (
+          <div className="flex-1 min-h-0">{callStage}</div>
+        ) : tab === 'chats' && !activeRoom ? (
           <div className="flex-1 flex items-center justify-center text-sm" style={{ color: textMuted(isDark) }}>
             {tx('chat.emptyThread')}
           </div>
-        )}
+        ) : null}
 
         {tab === 'letters' && (
           <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar p-5">
@@ -1806,7 +1951,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                 }}
               >
                 <h3 className="font-bold" style={{ color: textPrimary(isDark) }}>
-                  New letter
+                  {tx('chat.newLetter')}
                 </h3>
                 <select
                   value={letterForm.type}
@@ -1823,9 +1968,9 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     border: `1px solid ${borderSubtle(isDark)}`,
                   }}
                 >
-                  <option value="GENERAL">General</option>
-                  <option value="ADMIN">Administrative</option>
-                  <option value="EXCUSE">Excuse / leave</option>
+                  <option value="GENERAL">{tx('chat.letterTypeGeneral')}</option>
+                  <option value="ADMIN">{tx('chat.letterTypeAdmin')}</option>
+                  <option value="EXCUSE">{tx('chat.letterTypeExcuse')}</option>
                 </select>
                 <select
                   value={letterForm.toUserId}
@@ -1839,10 +1984,10 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     border: `1px solid ${borderSubtle(isDark)}`,
                   }}
                 >
-                  <option value="">To…</option>
+                  <option value="">{tx('chat.letterTo')}</option>
                   {team.map((t) => (
                     <option key={t.id} value={t.id}>
-                      {t.name} ({t.role})
+                      {t.name} ({roleLabel(t.role)})
                     </option>
                   ))}
                 </select>
@@ -1851,7 +1996,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   onChange={(e) =>
                     setLetterForm((f) => ({ ...f, subject: e.target.value }))
                   }
-                  placeholder="Subject"
+                  placeholder={tx('chat.letterSubject')}
                   className="w-full rounded-xl px-3 py-2 text-sm"
                   style={{
                     background: surfaceItem(isDark),
@@ -1865,7 +2010,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     setLetterForm((f) => ({ ...f, body: e.target.value }))
                   }
                   rows={6}
-                  placeholder="Body"
+                  placeholder={tx('chat.letterBody')}
                   className="w-full rounded-xl px-3 py-2 text-sm resize-none"
                   style={{
                     background: surfaceItem(isDark),
@@ -1880,7 +2025,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     className="px-3 py-2 rounded-xl text-xs font-semibold"
                     style={{ color: textSecondary(isDark) }}
                   >
-                    Cancel
+                    {tx('common.cancel')}
                   </button>
                   <button
                     type="button"
@@ -1889,7 +2034,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     className="px-3 py-2 rounded-xl text-xs font-semibold text-white"
                     style={{ background: ACCENT.letter }}
                   >
-                    Send letter
+                    {tx('chat.sendLetter')}
                   </button>
                 </div>
               </div>
@@ -1903,13 +2048,13 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                   }}
                 >
                   <span
-                    className="text-[10px] font-bold uppercase px-2 py-0.5 rounded"
+                    className="text-[10px] font-bold px-2 py-0.5 rounded"
                     style={{
                       background: hexToRgba(ACCENT.letter, 0.2),
                       color: ACCENT.letter,
                     }}
                   >
-                    {activeLetter.type}
+                    {letterTypeLabel(activeLetter.type)}
                   </span>
                   <h2
                     className="text-lg font-bold"
@@ -1950,7 +2095,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     value={replyLetterBody}
                     onChange={(e) => setReplyLetterBody(e.target.value)}
                     rows={3}
-                    placeholder="Reply to this letter…"
+                    placeholder={tx('chat.letterReply')}
                     className="w-full rounded-xl px-3 py-2 text-sm resize-none"
                     style={{
                       background: surfaceItem(isDark),
@@ -1965,7 +2110,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                     className="px-4 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-40"
                     style={{ background: ACCENT.letter }}
                   >
-                    Send reply
+                    {tx('chat.sendReply')}
                   </button>
                 </div>
               </div>
@@ -1974,7 +2119,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                 className="text-sm text-center py-20"
                 style={{ color: textMuted(isDark) }}
               >
-                Select a letter or compose a new one
+                {tx('chat.selectLetter')}
               </p>
             )}
           </div>
@@ -1985,10 +2130,83 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
             className="flex-1 flex items-center justify-center text-sm"
             style={{ color: textMuted(isDark) }}
           >
-            Open a saved message from the left list
+            {tx('chat.openSaved')}
           </div>
         )}
       </section>
+
+      {groupPickOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.55)' }}
+          onClick={() => setGroupPickOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl p-5 space-y-3"
+            style={glass}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-bold" style={{ color: textPrimary(isDark) }}>
+              {tx('meetingPage.groupCall')}
+            </h3>
+            <p className="text-xs" style={{ color: textMuted(isDark) }}>
+              {tx('meetingPage.pickPeople')}
+            </p>
+            <ul className="max-h-56 overflow-auto space-y-1">
+              {team
+                .filter((member) => member.id !== myId)
+                .map((member) => {
+                  const on = groupPickIds.includes(member.id);
+                  return (
+                    <li key={member.id}>
+                      <label
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs cursor-pointer"
+                        style={{
+                          background: on ? hexToRgba(primaryColor, 0.15) : undefined,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() =>
+                            setGroupPickIds((prev) =>
+                              on
+                                ? prev.filter((id) => id !== member.id)
+                                : [...prev, member.id],
+                            )
+                          }
+                        />
+                        <span style={{ color: textPrimary(isDark) }}>{member.name}</span>
+                        <span style={{ color: textMuted(isDark) }}>
+                          {roleLabel(member.role)}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setGroupPickOpen(false)}
+                className="px-3 py-2 rounded-xl text-xs font-semibold"
+                style={{ color: textSecondary(isDark) }}
+              >
+                {tx('common.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={inCall || groupPickIds.length < 1}
+                onClick={beginGroupCall}
+                className="px-3 py-2 rounded-xl text-xs font-semibold text-white disabled:opacity-40"
+                style={{ background: primaryColor }}
+              >
+                {tx('meetingPage.startGroupCall')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create channel dialog */}
       {createOpen && (
@@ -2017,7 +2235,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
               }}
             />
             <p className="text-xs" style={{ color: textMuted(isDark) }}>
-              Members (optional — empty = everyone)
+              {tx('chat.channelMembersHint')}
             </p>
             <ul className="max-h-40 overflow-auto space-y-1">
               {team.map((t) => {
@@ -2038,7 +2256,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                         }
                       />
                       <span style={{ color: textPrimary(isDark) }}>{t.name}</span>
-                      <span style={{ color: textMuted(isDark) }}>{t.role}</span>
+                      <span style={{ color: textMuted(isDark) }}>{roleLabel(t.role)}</span>
                     </label>
                   </li>
                 );
@@ -2051,7 +2269,7 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                 className="px-3 py-2 rounded-xl text-xs font-semibold"
                 style={{ color: textSecondary(isDark) }}
               >
-                Cancel
+                {tx('common.cancel')}
               </button>
               <button
                 type="button"
@@ -2060,29 +2278,11 @@ export function WorkspaceChatClient({ workspaceId }: { workspaceId: string }) {
                 className="px-3 py-2 rounded-xl text-xs font-semibold text-white disabled:opacity-40"
                 style={{ background: ACCENT.channel }}
               >
-                Create
+                {tx('common.create')}
               </button>
             </div>
           </div>
         </div>
-      )}
-      {activeRoom && (
-        <MeetingOverlay
-          open={meetingOpen}
-          onClose={() => setMeetingOpen(false)}
-          isDark={isDark}
-          workspaceId={workspaceId}
-          chatRoomId={activeRoom.id}
-          roomTitle={activeRoom.title}
-          socket={socketLive}
-          self={{
-            id: myId,
-            name: myName,
-            avatarUrl: (session?.user as { image?: string | null } | undefined)?.image || null,
-          }}
-          allowed={meetingAllowed}
-          upgradeHint={meetingUpgradeHint}
-        />
       )}
     </div>
   );

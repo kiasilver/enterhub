@@ -28,6 +28,8 @@ import GlassButton from '@/components/SafeDashboard/GlassButton';
 import { WidgetFrame } from '@/components/dashboards/WidgetFrame';
 import { MyTasksViews, type MyTaskItem, type MyTasksViewData } from '@/components/dashboards/MyTasksViews';
 import { CreateTaskModal } from '@/components/board/CreateTaskModal';
+import { localizeProjectName } from '@/lib/list-i18n';
+import { useBoardsLive } from '@/hooks/useBoardsLive';
 import {
   textPrimary,
   textSecondary,
@@ -45,6 +47,7 @@ type MyData = MyTasksViewData & {
   myProjects: {
     id: string;
     name: string;
+    isGeneral?: boolean;
     updatedAt: string;
     open: number;
     done: number;
@@ -128,6 +131,28 @@ function patchTaskChecklist(
   };
 }
 
+function removeTaskFromDashboard(data: MyData, cardId: string): MyData {
+  const drop = (tasks: MyTaskItem[]) => tasks.filter((t) => t.id !== cardId);
+  return {
+    ...data,
+    tasks: drop(data.tasks),
+    buckets: {
+      overdue: drop(data.buckets.overdue),
+      today: drop(data.buckets.today),
+      tomorrow: drop(data.buckets.tomorrow),
+      week: drop(data.buckets.week),
+      later: drop(data.buckets.later),
+      nodate: drop(data.buckets.nodate),
+    },
+    boardColumns: {
+      todo: drop(data.boardColumns.todo),
+      progress: drop(data.boardColumns.progress),
+      review: drop(data.boardColumns.review),
+      done: drop(data.boardColumns.done),
+    },
+  };
+}
+
 /** Personal view: my projects, my tasks, my task progress */
 export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
   const { theme } = useTheme();
@@ -148,25 +173,25 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const loadDashboard = useCallback(async () => {
-    setLoading(true);
+  const loadDashboard = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/my-dashboard`);
       const json = await res.json();
       if (!res.ok) {
-        setError(json.error || 'Failed to load');
-        setData(null);
+        setError(json.error || t('common.loadFailed'));
+        if (!opts?.silent) setData(null);
         return;
       }
       setData(normalizeDashboard(json.data));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
-      setData(null);
+      setError(e instanceof Error ? e.message : t('common.loadFailed'));
+      if (!opts?.silent) setData(null);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, t]);
 
   useEffect(() => {
     void loadDashboard();
@@ -203,6 +228,22 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
+  useBoardsLive(workspaceId, (ev) => {
+    if (ev.type === 'card.deleted') {
+      setData((prev) => (prev ? removeTaskFromDashboard(prev, ev.cardId) : prev));
+      return;
+    }
+    if (
+      ev.type === 'card.changed' ||
+      ev.type === 'board.changed' ||
+      ev.type === 'board.archived' ||
+      ev.type === 'workspace.invalidate'
+    ) {
+      // Silent — avoid full-page flash when checklist toggles emit card.changed
+      void loadDashboard({ silent: true });
+    }
+  });
+
   const applyChecklistPatch = useCallback(
     (cardId: string, itemId: string, isDone: boolean) => {
       setData((prev) =>
@@ -230,20 +271,25 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
     if (!data) return [];
     const p = data.progress;
     return [
-      { name: 'Todo', count: p.todo ?? 0 },
-      { name: 'Progress', count: p.progress ?? 0 },
-      { name: 'Review', count: p.review ?? 0 },
-      { name: 'Done', count: p.done ?? 0 },
-      { name: 'Overdue', count: p.overdue ?? 0 },
+      { name: t('myTasksPage.todo'), count: p.todo ?? 0 },
+      { name: t('myTasksPage.onProcess'), count: p.progress ?? 0 },
+      { name: t('myTasksPage.onReview'), count: p.review ?? 0 },
+      { name: t('myTasksPage.completed'), count: p.done ?? 0 },
+      { name: t('myTasksPage.overdue'), count: p.overdue ?? 0 },
     ];
-  }, [data]);
+  }, [data, t]);
 
   const projectOptions = useMemo(() => {
     if (!data) return [] as [string, string][];
     const map = new Map<string, string>();
-    for (const t of data.tasks) map.set(t.board.id, t.board.name);
+    for (const item of data.tasks) {
+      map.set(
+        item.board.id,
+        localizeProjectName(item.board.name, t, item.board.isGeneral),
+      );
+    }
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [data]);
+  }, [data, t]);
 
   if (loading) {
     return (
@@ -290,7 +336,7 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
               className="inline-flex items-stretch gap-1 border-b self-start"
               style={{ borderColor: borderSubtle(isDark) }}
               role="tablist"
-              aria-label="Task views"
+              aria-label={t('myTasksPage.listViews')}
             >
               {(
                 [
@@ -325,18 +371,18 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
               })}
             </div>
 
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1 xl:flex-initial xl:max-w-2xl xl:ml-auto">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1 xl:flex-initial xl:max-w-2xl xl:ms-auto">
               <div className="relative flex-1 min-w-0 sm:min-w-[180px]">
                 <MdSearch
                   size={18}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                  className="absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none"
                   style={{ color: textMuted(isDark) }}
                 />
                 <input
                   value={taskQuery}
                   onChange={(e) => setTaskQuery(e.target.value)}
                   placeholder={t('myTasksPage.searchPlaceholder')}
-                  className="w-full rounded-xl pl-10 pr-14 py-2.5 text-sm outline-none"
+                  className="w-full rounded-xl ps-10 pe-14 py-2.5 text-sm outline-none"
                   style={fieldStyle}
                 />
                 <kbd
@@ -396,7 +442,7 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
               onChange={(e) => setProjectFilter(e.target.value)}
               className="rounded-xl px-3 py-2.5 text-sm outline-none w-full sm:w-auto sm:min-w-[160px]"
               style={fieldStyle}
-              aria-label="Project filter"
+              aria-label={t('myTasksPage.filterProject')}
             >
               <option value="all">{t('myTasksPage.allProjects')}</option>
               {projectOptions.map(([id, name]) => (
@@ -552,7 +598,9 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
                       }}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium truncate">{p.name}</span>
+                        <span className="font-medium truncate">
+                          {localizeProjectName(p.name, t, p.isGeneral)}
+                        </span>
                         <span
                           className="text-[10px] tabular-nums shrink-0"
                           style={{ color: textMuted(isDark) }}
@@ -561,16 +609,18 @@ export function MyTasksClient({ workspaceId }: { workspaceId: string }) {
                         </span>
                       </div>
                       <div className="flex gap-2 mt-1 text-[10px]" style={{ color: textMuted(isDark) }}>
-                        <span>{p.open} open</span>
+                        <span>{t('projectsPage.open', { n: p.open })}</span>
                         {p.overdue > 0 && (
-                          <span style={{ color: '#ef4444' }}>{p.overdue} overdue</span>
+                          <span style={{ color: '#ef4444' }}>
+                            {t('projectsPage.overdue', { n: p.overdue })}
+                          </span>
                         )}
                       </div>
                     </Link>
                   </li>
                 ))}
                 {data.myProjects.length === 0 && (
-                  <li style={{ color: textMuted(isDark) }}>No projects with your tasks yet</li>
+                  <li style={{ color: textMuted(isDark) }}>{t('myTasksPage.emptyProjects')}</li>
                 )}
               </ul>
             </WidgetFrame>

@@ -8,6 +8,11 @@ import {
   departmentColor,
   departmentIcon,
 } from "@/lib/department-meta";
+import {
+  DEFAULT_BOARD_LISTS,
+  GENERAL_BOARD_NAME,
+  isGeneralBoardName,
+} from "@/lib/board-lists";
 
 export {
   DEPT_COLORS,
@@ -86,16 +91,16 @@ export async function backfillBoardDepartments(workspaceId: string) {
   }
 }
 
+/** True org-level admin — NOT board:settings (board leads / IT supervisors). */
 export async function isWorkspaceAdmin(
   userId: string,
   workspaceId: string,
 ): Promise<boolean> {
-  const [members, settings, audit] = await Promise.all([
+  const [members, audit] = await Promise.all([
     hasPermission(userId, workspaceId, "workspace:members"),
-    hasPermission(userId, workspaceId, "board:settings"),
     hasPermission(userId, workspaceId, "workspace:audit"),
   ]);
-  return members || settings || audit;
+  return members || audit;
 }
 
 /** Create / edit / disable / delete any department (org-level access). */
@@ -165,6 +170,19 @@ export async function isBoardDepartmentSupervisor(
   return isDepartmentSupervisor(userId, board.departmentId);
 }
 
+export async function canArchiveBoard(
+  userId: string,
+  board: { workspaceId: string; departmentId: string | null },
+): Promise<boolean> {
+  if (await hasPermission(userId, board.workspaceId, "board:delete")) return true;
+  if (await hasPermission(userId, board.workspaceId, "board:settings")) return true;
+  if (await canManageDepartments(userId, board.workspaceId)) return true;
+  if (board.departmentId) {
+    return isDepartmentSupervisor(userId, board.departmentId);
+  }
+  return false;
+}
+
 export async function listAccessibleDepartmentIds(
   userId: string,
   workspaceId: string,
@@ -177,6 +195,83 @@ export async function listAccessibleDepartmentIds(
   return rows.map((r) => r.departmentId);
 }
 
+/**
+ * Every real department gets a default "General" / عمومی project so tasks
+ * never sit on the department itself and there is always a drop target.
+ */
+export async function ensureDepartmentGeneralBoard(
+  workspaceId: string,
+  departmentId: string,
+) {
+  const existingGeneral = await prisma.board.findFirst({
+    where: {
+      workspaceId,
+      departmentId,
+      archivedAt: null,
+      isGeneral: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existingGeneral) return existingGeneral;
+
+  const named = await prisma.board.findFirst({
+    where: {
+      workspaceId,
+      departmentId,
+      archivedAt: null,
+      OR: [{ name: GENERAL_BOARD_NAME }, { name: "عمومی" }],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (named) {
+    if (!named.isGeneral) {
+      return prisma.board.update({
+        where: { id: named.id },
+        data: { isGeneral: true },
+      });
+    }
+    return named;
+  }
+
+  const dept = await prisma.department.findFirst({
+    where: { id: departmentId, workspaceId },
+    select: { name: true },
+  });
+  if (dept) {
+    const seedNames = [`${dept.name} Board`];
+    const seed = await prisma.board.findFirst({
+      where: {
+        workspaceId,
+        departmentId,
+        archivedAt: null,
+        name: { in: seedNames },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    if (seed) {
+      return prisma.board.update({
+        where: { id: seed.id },
+        data: {
+          isGeneral: true,
+          name: isGeneralBoardName(seed.name) ? seed.name : GENERAL_BOARD_NAME,
+        },
+      });
+    }
+  }
+
+  return prisma.board.create({
+    data: {
+      workspaceId,
+      departmentId,
+      name: GENERAL_BOARD_NAME,
+      description: "Default inbox for this department",
+      visibility: "WORKSPACE",
+      isGeneral: true,
+      lists: { create: [...DEFAULT_BOARD_LISTS] },
+    },
+  });
+}
+
 export async function seedDepartmentsWithBoards(
   workspaceId: string,
   departments: DepartmentKey[],
@@ -184,31 +279,7 @@ export async function seedDepartmentsWithBoards(
   const depts = await ensureWorkspaceDepartments(workspaceId, departments);
   const boards = [];
   for (const d of depts) {
-    const existing = await prisma.board.findFirst({
-      where: { workspaceId, departmentId: d.id },
-    });
-    if (existing) {
-      boards.push(existing);
-      continue;
-    }
-    const board = await prisma.board.create({
-      data: {
-        workspaceId,
-        departmentId: d.id,
-        name: `${d.name} Board`,
-        description: `Starter board for ${d.name}`,
-        visibility: "WORKSPACE",
-        background: d.color,
-        lists: {
-          create: [
-            { title: "To Do", order: 0 },
-            { title: "In Progress", order: 1 },
-            { title: "Done", order: 2 },
-          ],
-        },
-      },
-    });
-    boards.push(board);
+    boards.push(await ensureDepartmentGeneralBoard(workspaceId, d.id));
   }
   return { departments: depts, boards };
 }

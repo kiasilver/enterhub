@@ -12,6 +12,7 @@ import {
   surfaceItem,
 } from '@/components/SafeDashboard/theme';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 
 /** Curated starters for common org units */
 export const DEPARTMENT_ICON_PRESETS: { name: string; label: string; keys?: string[] }[] = [
@@ -45,6 +46,7 @@ type Props = {
 
 export function DepartmentIconPicker({ value, onChange, accentColor }: Props) {
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
   const [query, setQuery] = useState('');
   const [browseAll, setBrowseAll] = useState(false);
@@ -85,7 +87,7 @@ export function DepartmentIconPicker({ value, onChange, accentColor }: Props) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium" style={{ color: textMuted(isDark) }}>
-            Selected icon
+            {t('departmentsPage.fieldIcon')}
           </p>
           <p className="text-sm font-semibold truncate" style={{ color: textPrimary(isDark) }}>
             {value || 'business'}
@@ -96,14 +98,18 @@ export function DepartmentIconPicker({ value, onChange, accentColor }: Props) {
       <div className="relative">
         <MdSearch
           size={16}
-          className="absolute left-3 top-1/2 -translate-y-1/2"
+          className="absolute start-3 top-1/2 -translate-y-1/2"
           style={{ color: textMuted(isDark) }}
         />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={browseAll ? 'Search all Material Icons…' : 'Search department icons…'}
-          className="w-full pl-9 pr-3 py-2.5 rounded-xl text-sm outline-none"
+          placeholder={
+            browseAll
+              ? t('departmentsPage.searchAllIcons')
+              : t('departmentsPage.searchIcons')
+          }
+          className="w-full ps-9 pe-3 py-2.5 rounded-xl text-sm outline-none text-start"
           style={field}
         />
       </div>
@@ -123,7 +129,7 @@ export function DepartmentIconPicker({ value, onChange, accentColor }: Props) {
             border: `1px solid ${borderSubtle(isDark)}`,
           }}
         >
-          Suggested
+          {t('departmentsPage.suggestedIcons')}
         </button>
         <button
           type="button"
@@ -139,7 +145,7 @@ export function DepartmentIconPicker({ value, onChange, accentColor }: Props) {
             border: `1px solid ${borderSubtle(isDark)}`,
           }}
         >
-          Browse all Material Icons
+          {t('departmentsPage.browseAllIcons')}
         </button>
       </div>
 

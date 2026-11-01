@@ -1,18 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useSession } from 'next-auth/react';
 import {
   MdAccessTime,
-  MdArrowUpward,
   MdAttachFile,
-  MdCheckBox,
   MdClose,
-  MdDelete,
   MdChatBubbleOutline,
+  MdDelete,
+  MdEdit,
   MdFlag,
   MdLabel,
   MdPersonAdd,
   MdPlayArrow,
+  MdSupervisorAccount,
   MdVisibility,
 } from 'react-icons/md';
 import { CARD_PRIORITIES, type CardPriorityValue } from '@/lib/workspace-labels';
@@ -21,7 +22,10 @@ import { useLiveElapsed } from '@/hooks/useLiveElapsed';
 import { WorkTimerBadge } from '@/components/ui/WorkTimerBadge';
 import { AppDateRangePicker } from '@/components/ui/AppDateRangePicker';
 import { AppDurationPicker, formatDurationLabel } from '@/components/ui/AppDurationPicker';
-import { isChecklistBookend } from '@/lib/checklist-defaults';
+import { EditableTextField } from '@/components/ui/EditableTextField';
+import { AutosaveToast } from '@/components/ui/AutosaveToast';
+import { ChecklistEditor } from '@/components/board/ChecklistEditor';
+import { isChecklistBookend, isChecklistEnd, isChecklistStart } from '@/lib/checklist-defaults';
 import {
   CardSchedulePanel,
   type DelayIncidentRow,
@@ -40,7 +44,7 @@ import {
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import {
-  localizeChecklistTitle,
+  localizeListTitle,
   localizePrioritySelect,
   localizeWorkspaceLabel,
 } from '@/lib/list-i18n';
@@ -48,6 +52,7 @@ import {
 type ChecklistItem = {
   id: string;
   title: string;
+  description?: string | null;
   isDone: boolean;
   linkedCardId?: string | null;
 };
@@ -81,6 +86,8 @@ type CardDetail = {
   rejectionNote?: string | null;
   priority?: CardPriorityValue;
   createdById?: string | null;
+  supervisorId?: string | null;
+  supervisor?: { id: string; name: string | null; email: string } | null;
   workspaceId?: string | null;
   list: { id: string; title: string };
   assignees?: { userId: string; user: { id: string; name: string | null; email: string } }[];
@@ -192,10 +199,17 @@ export function CardDetailsModal({
 }: Props) {
   const { theme } = useTheme();
   const { t } = useLang();
+  const { data: session } = useSession();
+  const myUserId = session?.user?.id || '';
   const isDark = theme === 'dark';
   const [card, setCard] = useState<CardDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saveToastOpen, setSaveToastOpen] = useState(false);
+  const saveHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveShownAt = useRef(0);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentBody, setEditingCommentBody] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -223,6 +237,8 @@ export function CardDetailsModal({
     { id: string; name: string; color: string }[]
   >([]);
   const [checklistTitle, setChecklistTitle] = useState('');
+  const [noteOpen, setNoteOpen] = useState<Record<string, boolean>>({});
+  const [supervisorId, setSupervisorId] = useState('');
   const [commentBody, setCommentBody] = useState('');
   const [mentionIds, setMentionIds] = useState<string[]>([]);
   const [members, setMembers] = useState<MemberOption[]>([]);
@@ -230,6 +246,8 @@ export function CardDetailsModal({
   const [mentionQuery, setMentionQuery] = useState('');
   const [deleting, setDeleting] = useState(false);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  /** Last persisted checklist titles — needed because local edits update state before blur-save */
+  const checklistTitleBaseline = useRef<Record<string, string>>({});
 
   const field = {
     border: `1px solid ${borderSubtle(isDark)}`,
@@ -259,18 +277,17 @@ export function CardDetailsModal({
   const role = card?.role;
   const isAssignee = role === 'assignee' || !!card?.isAssignee;
   const isManager =
-    role === 'board_admin' || role === 'creator' || !!p?.canMoveToDone;
+    role === 'board_admin' ||
+    role === 'creator' ||
+    role === 'supervisor' ||
+    !!p?.canMoveToDone;
   const workflow = card?.workflowStatus || 'ASSIGNED';
   const workTimerActive = isWorkTimerActive(workflow, card?.startedAt);
   const workTimerLabel = useLiveElapsed(card?.startedAt, workTimerActive);
   const checklistDone =
     !card?.checklistItems?.length ||
     card.checklistItems.every((i) => i.isDone);
-  const assignmentReady =
-    !!startDate &&
-    !!dueDate &&
-    estimatedHours !== '' &&
-    Number(estimatedHours) > 0;
+  const assignmentReady = !!startDate && !!dueDate;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -292,6 +309,17 @@ export function CardDetailsModal({
       setDueDirty(false);
       setDueSaveReason('');
       setSelectedLabelIds((data.labels || []).map((l) => l.label.id));
+      setSupervisorId(data.supervisor?.id || data.supervisorId || '');
+      setNoteOpen(
+        Object.fromEntries(
+          (data.checklistItems || [])
+            .filter((i) => !!i.description)
+            .map((i) => [i.id, true]),
+        ),
+      );
+      checklistTitleBaseline.current = Object.fromEntries(
+        (data.checklistItems || []).map((i) => [i.id, i.title]),
+      );
 
       if (data.workspaceId) {
         const [mRes, lRes] = await Promise.all([
@@ -350,6 +378,20 @@ export function CardDetailsModal({
       .slice(0, 6);
   }, [mentionOpen, mentionQuery, members]);
 
+  function pulseSaved() {
+    // Coalesce rapid saves: keep chip visible and only reset dismiss timer
+    const HIDE_MS = 2200;
+    const now = Date.now();
+    if (saveHideTimer.current) clearTimeout(saveHideTimer.current);
+    if (!saveToastOpen || now - saveShownAt.current > HIDE_MS) {
+      saveShownAt.current = now;
+      setSaveToastOpen(true);
+    }
+    saveHideTimer.current = setTimeout(() => {
+      setSaveToastOpen(false);
+    }, HIDE_MS);
+  }
+
   async function patchCard(body: Record<string, unknown>) {
     const res = await fetch(`/api/boards/${boardId}/cards/${cardId}`, {
       method: 'PATCH',
@@ -361,13 +403,16 @@ export function CardDetailsModal({
       setError(json.error || 'Update failed');
       return false;
     }
+    pulseSaved();
+    onChanged?.();
     return true;
   }
 
-  async function saveTitle() {
+  async function saveTitle(nextValue?: string) {
     if (!canEditTitle || !card) return;
-    const trimmed = title.trim();
+    const trimmed = (nextValue ?? title).trim();
     if (!trimmed || trimmed === card.title) return;
+    if (nextValue !== undefined) setTitle(trimmed);
     const ok = await patchCard({ title: trimmed });
     if (ok) setCard((c) => (c ? { ...c, title: trimmed } : c));
   }
@@ -533,6 +578,120 @@ export function CardDetailsModal({
     }
   }
 
+  async function saveSupervisor(nextId: string) {
+    if (!canAssign || !card) return;
+    const prev = supervisorId;
+    setSupervisorId(nextId);
+    const ok = await patchCard({ supervisorId: nextId || null });
+    if (!ok) {
+      setSupervisorId(prev);
+      return;
+    }
+    const member = members.find((m) => m.userId === nextId);
+    setCard((c) =>
+      c
+        ? {
+            ...c,
+            supervisorId: nextId || null,
+            supervisor: nextId
+              ? {
+                  id: nextId,
+                  name: member?.label || null,
+                  email: member?.label || '',
+                }
+              : null,
+          }
+        : c,
+    );
+  }
+
+  async function saveChecklistNote(item: ChecklistItem, description: string) {
+    if (!canChecklist) return;
+    const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: item.id, description }),
+    });
+    if (!res.ok) {
+      const json = await res.json();
+      setError(json.error || 'Failed');
+      return;
+    }
+    setCard((c) =>
+      c
+        ? {
+            ...c,
+            checklistItems: c.checklistItems.map((i) =>
+              i.id === item.id ? { ...i, description } : i,
+            ),
+          }
+        : c,
+    );
+    pulseSaved();
+  }
+
+  async function saveChecklistTitle(item: ChecklistItem, title: string) {
+    if (!canChecklist) return;
+    const next = title.trim();
+    const baseline = checklistTitleBaseline.current[item.id] ?? item.title;
+    if (!next || next === baseline) return;
+    const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: item.id, title: next }),
+    });
+    if (!res.ok) {
+      const json = await res.json();
+      setError(json.error || 'Failed');
+      // Revert local title to baseline
+      setCard((c) =>
+        c
+          ? {
+              ...c,
+              checklistItems: c.checklistItems.map((i) =>
+                i.id === item.id ? { ...i, title: baseline } : i,
+              ),
+            }
+          : c,
+      );
+      return;
+    }
+    checklistTitleBaseline.current[item.id] = next;
+    setCard((c) =>
+      c
+        ? {
+            ...c,
+            checklistItems: c.checklistItems.map((i) =>
+              i.id === item.id ? { ...i, title: next } : i,
+            ),
+          }
+        : c,
+    );
+    pulseSaved();
+    onChanged?.();
+  }
+
+  async function deleteChecklistItem(item: ChecklistItem) {
+    if (!canChecklist || isChecklistBookend(item.title)) return;
+    const res = await fetch(
+      `/api/boards/${boardId}/cards/${cardId}/checklist?itemId=${encodeURIComponent(item.id)}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setError(json.error || 'Failed');
+      return;
+    }
+    setCard((c) =>
+      c
+        ? {
+            ...c,
+            checklistItems: c.checklistItems.filter((i) => i.id !== item.id),
+          }
+        : c,
+    );
+  }
+
   async function toggleAssignee(userId: string) {
     if (!canAssign || !card) return;
     const assigned = card.assignees?.some((a) => a.userId === userId);
@@ -553,8 +712,8 @@ export function CardDetailsModal({
     await load();
   }
 
-  async function addChecklist(e: FormEvent) {
-    e.preventDefault();
+  async function addChecklist(e?: FormEvent) {
+    e?.preventDefault();
     if (!canChecklist || !checklistTitle.trim()) return;
     const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
       method: 'POST',
@@ -570,8 +729,42 @@ export function CardDetailsModal({
     await load();
   }
 
+  async function reorderChecklist(orderedMiddleIds: string[]) {
+    if (!canChecklist || !card) return;
+    const start = card.checklistItems.filter((i) => isChecklistStart(i.title));
+    const end = card.checklistItems.filter((i) => isChecklistEnd(i.title));
+    const byId = new Map(card.checklistItems.map((i) => [i.id, i]));
+    const middle = orderedMiddleIds
+      .map((id) => byId.get(id))
+      .filter(Boolean) as ChecklistItem[];
+    const nextItems = [...start, ...middle, ...end];
+    setCard((c) => (c ? { ...c, checklistItems: nextItems } : c));
+    const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderedIds: orderedMiddleIds }),
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setError(json.error || 'Failed');
+      await load();
+      return;
+    }
+    pulseSaved();
+    onChanged?.();
+  }
+
   async function toggleChecklist(item: ChecklistItem) {
     if (!canChecklist) return;
+    const markingEnd = isChecklistEnd(item.title) && !item.isDone;
+    if (markingEnd) {
+      const items = card?.checklistItems || [];
+      const middle = items.filter((i) => !isChecklistBookend(i.title));
+      if (middle.some((i) => !i.isDone)) {
+        setError(t('myTasksPage.finishNeedMilestones'));
+        return;
+      }
+    }
     const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -582,16 +775,42 @@ export function CardDetailsModal({
       setError(json.error || 'Failed');
       return;
     }
+    const nextItems = (card?.checklistItems || []).map((i) => {
+      if (i.id === item.id) return { ...i, isDone: !i.isDone };
+      // Server auto-marks Start when End is checked
+      if (markingEnd && isChecklistStart(i.title)) return { ...i, isDone: true };
+      return i;
+    });
     setCard((c) =>
       c
         ? {
             ...c,
-            checklistItems: c.checklistItems.map((i) =>
-              i.id === item.id ? { ...i, isDone: !i.isDone } : i,
-            ),
+            checklistItems: nextItems,
           }
         : c,
     );
+    pulseSaved();
+    onChanged?.();
+    const allDone = nextItems.every((i) => i.isDone);
+    if (markingEnd && allDone && isAssignee) {
+      const hasSupervisor = !!(card?.supervisorId || card?.supervisor?.id);
+      const finishTo = hasSupervisor ? 'review' : 'done';
+      const moved = await fetch(
+        `/api/boards/${boardId}/cards/${cardId}/workflow/move`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: finishTo }),
+        },
+      );
+      if (!moved.ok) {
+        const json = await moved.json().catch(() => ({}));
+        setError(json.error || 'Failed');
+        return;
+      }
+      onChanged?.();
+      onClose();
+    }
   }
 
   async function promoteChecklist(item: ChecklistItem) {
@@ -686,14 +905,61 @@ export function CardDetailsModal({
     }
     setCommentBody('');
     setMentionIds([]);
+    pulseSaved();
     await load();
+    onChanged?.();
+  }
+
+  async function saveCommentEdit(commentId: string) {
+    const next = editingCommentBody.trim();
+    if (!next) return;
+    const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/comments`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commentId, body: next }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || 'Failed');
+      return;
+    }
+    setEditingCommentId(null);
+    setEditingCommentBody('');
+    setCard((c) =>
+      c
+        ? {
+            ...c,
+            comments: c.comments.map((cm) =>
+              cm.id === commentId ? { ...cm, body: next } : cm,
+            ),
+          }
+        : c,
+    );
+    pulseSaved();
+  }
+
+  async function deleteComment(commentId: string) {
+    if (!window.confirm(t('boardTask.deleteCommentConfirm'))) return;
+    const res = await fetch(
+      `/api/boards/${boardId}/cards/${cardId}/comments?commentId=${encodeURIComponent(commentId)}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setError(json.error || 'Failed');
+      return;
+    }
+    setCard((c) =>
+      c
+        ? { ...c, comments: c.comments.filter((cm) => cm.id !== commentId) }
+        : c,
+    );
+    pulseSaved();
+    onChanged?.();
   }
 
   if (!open) return null;
 
-  const items = card?.checklistItems || [];
-  const done = items.filter((i) => i.isDone).length;
-  const progress = items.length ? Math.round((done / items.length) * 100) : 0;
   const assignedIds = new Set(card?.assignees?.map((a) => a.userId) || []);
 
   return (
@@ -714,9 +980,14 @@ export function CardDetailsModal({
           className="flex items-center justify-between gap-3 px-5 py-3 shrink-0"
           style={{ borderBottom: `1px solid ${borderSubtle(isDark)}` }}
         >
-          <p className="text-sm truncate" style={{ color: textSecondary(isDark) }}>
-            {card?.list?.title || t('boardTask.list')}
-          </p>
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="text-sm truncate" style={{ color: textSecondary(isDark) }}>
+              {card?.list?.title
+                ? localizeListTitle(card.list.title, t)
+                : t('boardTask.list')}
+            </p>
+            <AutosaveToast open={saveToastOpen} isDark={isDark} />
+          </div>
           <div className="flex items-center gap-1">
             {canDelete && (
               <button
@@ -753,13 +1024,15 @@ export function CardDetailsModal({
           {card && (
             <div className="grid grid-cols-1 md:grid-cols-[1fr_240px] gap-6">
               <div className="space-y-5 min-w-0">
-                <input
+                <EditableTextField
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onBlur={() => void saveTitle()}
+                  onChange={setTitle}
+                  onCommit={(v) => void saveTitle(v)}
                   disabled={!canEditTitle}
-                  className="w-full text-xl font-bold bg-transparent outline-none rounded-lg px-1 py-0.5"
-                  style={{ color: textPrimary(isDark) }}
+                  size="title"
+                  isDark={isDark}
+                  aria-label={t('boardTask.taskTitle')}
+                  placeholder={t('boardTask.titleRequired')}
                 />
 
                 <div>
@@ -778,70 +1051,76 @@ export function CardDetailsModal({
                   />
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <p
-                      className="text-xs font-medium inline-flex items-center gap-1.5"
-                      style={{ color: textMuted(isDark) }}
-                    >
-                      <MdCheckBox size={14} />
-                      {t('boardTask.checklist')} {items.length > 0 ? `· ${progress}%` : ''}
-                    </p>
-                  </div>
-                  <ul className="space-y-1.5 mb-2">
-                    {items.map((item) => (
-                      <li
-                        key={item.id}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
-                        style={{ background: surfaceItem(isDark) }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={item.isDone}
-                          disabled={!canChecklist}
-                          onChange={() => void toggleChecklist(item)}
-                        />
-                        <span
-                          className="flex-1 text-sm"
-                          style={{
-                            color: textPrimary(isDark),
-                            textDecoration: item.isDone ? 'line-through' : undefined,
-                            opacity: item.isDone ? 0.6 : 1,
-                          }}
-                        >
-                          {localizeChecklistTitle(item.title, t)}
-                        </span>
-                        {canChecklist &&
-                          !item.linkedCardId &&
-                          !isChecklistBookend(item.title) && (
-                          <button
-                            type="button"
-                            title={t('boardTask.promoteToCard')}
-                            className="p-1 rounded"
-                            style={{ color: textMuted(isDark) }}
-                            onClick={() => void promoteChecklist(item)}
-                          >
-                            <MdArrowUpward size={14} />
-                          </button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  {canChecklist && (
-                    <form onSubmit={addChecklist} className="flex gap-2">
-                      <input
-                        value={checklistTitle}
-                        onChange={(e) => setChecklistTitle(e.target.value)}
-                        placeholder={t('boardTask.addChecklistItem')}
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-transparent text-sm"
-                        style={field}
-                      />
-                      <GlassButton type="submit" className="px-3 py-1.5 rounded-lg text-xs">
-                        {t('boardTask.add')}
-                      </GlassButton>
-                    </form>
-                  )}
-                </div>
+                <ChecklistEditor
+                  isDark={isDark}
+                  mode="edit"
+                  canEdit={canChecklist}
+                  draft={checklistTitle}
+                  onDraftChange={setChecklistTitle}
+                  onAdd={() => void addChecklist()}
+                  items={(card.checklistItems || []).map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    isDone: item.isDone,
+                    description: item.description,
+                    linkedCardId: item.linkedCardId,
+                  }))}
+                  noteOpen={noteOpen}
+                  onToggleNote={(id, open) => {
+                    setNoteOpen((prev) => ({ ...prev, [id]: open }));
+                    if (!open && canChecklist) {
+                      const item = card.checklistItems.find((i) => i.id === id);
+                      if (item) void saveChecklistNote(item, '');
+                    }
+                  }}
+                  onTitleChange={(id, nextTitle) => {
+                    setCard((c) =>
+                      c
+                        ? {
+                            ...c,
+                            checklistItems: c.checklistItems.map((i) =>
+                              i.id === id ? { ...i, title: nextTitle } : i,
+                            ),
+                          }
+                        : c,
+                    );
+                  }}
+                  onTitleCommit={(id, nextTitle) => {
+                    const item = card.checklistItems.find((i) => i.id === id);
+                    if (item) void saveChecklistTitle(item, nextTitle);
+                  }}
+                  onToggleDone={(id) => {
+                    const item = card.checklistItems.find((i) => i.id === id);
+                    if (item) void toggleChecklist(item);
+                  }}
+                  onNoteChange={(id, description) => {
+                    setCard((c) =>
+                      c
+                        ? {
+                            ...c,
+                            checklistItems: c.checklistItems.map((i) =>
+                              i.id === id ? { ...i, description } : i,
+                            ),
+                          }
+                        : c,
+                    );
+                    setNoteOpen((prev) => ({ ...prev, [id]: true }));
+                  }}
+                  onNoteCommit={(id, description) => {
+                    const item = card.checklistItems.find((i) => i.id === id);
+                    if (item) void saveChecklistNote(item, description);
+                  }}
+                  onRemove={(id) => {
+                    const item = card.checklistItems.find((i) => i.id === id);
+                    if (item) void deleteChecklistItem(item);
+                  }}
+                  onPromote={(id) => {
+                    const item = card.checklistItems.find((i) => i.id === id);
+                    if (item) void promoteChecklist(item);
+                  }}
+                  onReorder={(ids) => void reorderChecklist(ids)}
+                  fieldStyle={field}
+                />
 
                 <div>
                   <p
@@ -900,18 +1179,85 @@ export function CardDetailsModal({
                     {t('boardTask.comments')}
                   </p>
                   <ul className="space-y-2 mb-3 max-h-48 overflow-y-auto">
-                    {(card.comments || []).map((c) => (
-                      <li
-                        key={c.id}
-                        className="px-3 py-2 rounded-lg text-sm"
-                        style={{ background: surfaceItem(isDark) }}
-                      >
-                        <p className="text-xs mb-1" style={{ color: textMuted(isDark) }}>
-                          {c.author.name || c.author.email}
-                        </p>
-                        <p style={{ color: textPrimary(isDark) }}>{renderCommentBody(c.body)}</p>
-                      </li>
-                    ))}
+                    {(card.comments || []).map((c) => {
+                      const mine = c.author.id === myUserId;
+                      const editing = editingCommentId === c.id;
+                      return (
+                        <li
+                          key={c.id}
+                          className="px-3 py-2 rounded-lg text-sm"
+                          style={{ background: surfaceItem(isDark) }}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <p className="text-xs" style={{ color: textMuted(isDark) }}>
+                              {c.author.name || c.author.email}
+                            </p>
+                            {mine && !editing && (
+                              <div className="flex items-center gap-0.5 shrink-0">
+                                <button
+                                  type="button"
+                                  className="p-1 rounded"
+                                  style={{ color: textMuted(isDark) }}
+                                  title={t('common.edit')}
+                                  aria-label={t('common.edit')}
+                                  onClick={() => {
+                                    setEditingCommentId(c.id);
+                                    setEditingCommentBody(c.body);
+                                  }}
+                                >
+                                  <MdEdit size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="p-1 rounded text-red-500"
+                                  title={t('common.delete')}
+                                  aria-label={t('common.delete')}
+                                  onClick={() => void deleteComment(c.id)}
+                                >
+                                  <MdDelete size={14} />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {editing ? (
+                            <div className="space-y-2">
+                              <textarea
+                                value={editingCommentBody}
+                                onChange={(e) => setEditingCommentBody(e.target.value)}
+                                rows={2}
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-transparent text-sm outline-none"
+                                style={field}
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-white"
+                                  style={{ background: '#2563EB' }}
+                                  onClick={() => void saveCommentEdit(c.id)}
+                                >
+                                  {t('common.save')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-medium"
+                                  style={{ color: textMuted(isDark) }}
+                                  onClick={() => {
+                                    setEditingCommentId(null);
+                                    setEditingCommentBody('');
+                                  }}
+                                >
+                                  {t('common.cancel')}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p style={{ color: textPrimary(isDark) }}>
+                              {renderCommentBody(c.body)}
+                            </p>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                   <form onSubmit={postComment} className="relative space-y-2">
                     <textarea
@@ -1007,6 +1353,42 @@ export function CardDetailsModal({
                         </li>
                       ))}
                     </ul>
+                  )}
+                </div>
+
+                <div>
+                  <p
+                    className="text-xs font-medium mb-2 inline-flex items-center gap-1.5"
+                    style={{ color: textMuted(isDark) }}
+                  >
+                    <MdSupervisorAccount size={14} />
+                    {t('boardTask.supervisorOptional')}
+                  </p>
+                  {canAssign ? (
+                    <select
+                      value={supervisorId}
+                      onChange={(e) => void saveSupervisor(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-transparent text-sm"
+                      style={field}
+                    >
+                      <option value="">{t('boardTask.noSupervisor')}</option>
+                      {members.map((m) => (
+                        <option key={m.userId} value={m.userId}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : card.supervisor ? (
+                    <p
+                      className="text-sm px-2 py-1.5 rounded-lg truncate"
+                      style={{ background: surfaceItem(isDark), color: textSecondary(isDark) }}
+                    >
+                      {card.supervisor.name || card.supervisor.email}
+                    </p>
+                  ) : (
+                    <p className="text-xs" style={{ color: textMuted(isDark) }}>
+                      {t('boardTask.noSupervisor')}
+                    </p>
                   )}
                 </div>
 
@@ -1302,7 +1684,8 @@ export function CardDetailsModal({
                     className="text-xs font-medium block mb-1.5"
                     style={{ color: textMuted(isDark) }}
                   >
-                    {t('boardTask.estimatedTime')}
+                    {t('boardTask.estimatedTime')}{' '}
+                    <span className="font-normal">({t('boardTask.estimatedOptional')})</span>
                   </label>
                   <AppDurationPicker
                     value={estimatedHours}

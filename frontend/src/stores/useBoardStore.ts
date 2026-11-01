@@ -28,6 +28,7 @@ type BoardState = Snapshot & {
   hydrate: (lists: BoardList[], cards: BoardCard[]) => void;
   /** Apply remote socket payload without triggering API. */
   applyRemoteCards: (cards: Array<{ id: string; listId: string; order: number }>) => void;
+  removeCard: (cardId: string) => void;
   onDragEnd: (result: DropResult) => Promise<void>;
 };
 
@@ -106,6 +107,19 @@ export const useBoardStore = create<BoardState>((set, get) => ({
       }
 
       return { lists, cardsById };
+    });
+  },
+
+  removeCard: (cardId) => {
+    set((state) => {
+      const { [cardId]: _removed, ...cardsById } = state.cardsById;
+      return {
+        cardsById,
+        lists: state.lists.map((l) => ({
+          ...l,
+          cardIds: l.cardIds.filter((id) => id !== cardId),
+        })),
+      };
     });
   },
 

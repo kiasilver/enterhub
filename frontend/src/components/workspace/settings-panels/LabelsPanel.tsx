@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useParams } from 'next/navigation';
 import { MdAdd, MdDelete, MdLabel } from 'react-icons/md';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import GlassButton from '@/components/SafeDashboard/GlassButton';
 import {
   SettingsGlassCard,
@@ -42,6 +43,7 @@ export default function LabelsPanel() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
 
   const [labels, setLabels] = useState<LabelRow[]>([]);
@@ -111,7 +113,7 @@ export default function LabelsPanel() {
 
   async function removeLabel(labelId: string) {
     if (!canManage) return;
-    if (!window.confirm('Delete this label from the workspace?')) return;
+    if (!window.confirm(t('settingsUi.deleteLabelConfirm'))) return;
     const res = await fetch(
       `/api/workspaces/${workspaceId}/labels?labelId=${labelId}`,
       { method: 'DELETE' },
@@ -128,10 +130,10 @@ export default function LabelsPanel() {
     <div className="space-y-6 max-w-3xl">
       <div>
         <h2 className="text-xl font-bold" style={{ color: textPrimary(isDark) }}>
-          Labels
+          {t('settingsUi.labelsTitle')}
         </h2>
         <p className="text-sm mt-1" style={{ color: textSecondary(isDark) }}>
-          Colored tags for tasks. Managers and supervisors can create labels; everyone can apply them when creating tasks.
+          {t('settingsUi.labelsSubtitle')}
         </p>
       </div>
 
@@ -139,12 +141,12 @@ export default function LabelsPanel() {
 
       {canManage && (
         <SettingsGlassCard accent="#f97316">
-          <SettingsSectionTitle>New label</SettingsSectionTitle>
+          <SettingsSectionTitle>{t('settingsUi.newLabel')}</SettingsSectionTitle>
           <form onSubmit={createLabel} className="mt-4 space-y-3">
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Label name"
+              placeholder={t('settingsUi.labelName')}
               maxLength={60}
               className="w-full rounded-xl px-3 py-2.5 text-sm bg-transparent outline-none"
               style={{ border: `1px solid ${borderSubtle(isDark)}`, color: textPrimary(isDark) }}
@@ -167,7 +169,7 @@ export default function LabelsPanel() {
             </div>
             <GlassButton type="submit" disabled={busy || !name.trim()} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm">
               <MdAdd size={16} />
-              Add label
+              {t('settingsUi.addLabel')}
             </GlassButton>
           </form>
         </SettingsGlassCard>
@@ -177,12 +179,12 @@ export default function LabelsPanel() {
         <SettingsSectionTitle>
           <span className="inline-flex items-center gap-2">
             <MdLabel size={18} />
-            Workspace labels
+            {t('settingsUi.workspaceLabels')}
           </span>
         </SettingsSectionTitle>
         {loading ? (
           <p className="text-sm mt-4" style={{ color: textMuted(isDark) }}>
-            Loading…
+            {t('common.loading')}
           </p>
         ) : (
           <ul className="mt-4 space-y-2">

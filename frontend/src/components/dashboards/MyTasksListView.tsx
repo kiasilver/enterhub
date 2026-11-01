@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 import {
   DragDropContext,
   Droppable,
@@ -12,11 +12,11 @@ import {
   MdAttachFile,
   MdChatBubbleOutline,
   MdCheckCircle,
+  MdEdit,
   MdErrorOutline,
   MdExpandLess,
   MdExpandMore,
   MdFlag,
-  MdMoreVert,
   MdRadioButtonUnchecked,
   MdTimelapse,
 } from 'react-icons/md';
@@ -33,8 +33,17 @@ import type { MyTaskItem } from '@/components/dashboards/MyTasksViews';
 import type { KanbanColumnId } from '@/components/dashboards/MyTasksKanban';
 import { isChecklistBookend } from '@/lib/checklist-defaults';
 import { localizeChecklistTitle, localizePriorityShort } from '@/lib/list-i18n';
+import { TaskPlaceChips } from '@/components/dashboards/TaskPlaceChips';
 import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { MyTasksEndOfTask } from '@/components/dashboards/MyTasksEndOfTask';
+import {
+  finishBlockReason,
+  applyColumnMove,
+  finishDestination,
+  relocateTaskToColumn,
+  taskLooksCompleted,
+} from '@/components/dashboards/my-tasks-finish';
 
 const SECTION_TITLE_KEYS: Record<KanbanColumnId, string> = {
   todo: 'myTasksPage.todo',
@@ -131,7 +140,7 @@ export function MyTasksListView({
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
-  const [reviewFlashId, setReviewFlashId] = useState<string | null>(null);
+  const [completeFlashId, setCompleteFlashId] = useState<string | null>(null);
 
   const board = local ?? columns;
 
@@ -146,10 +155,10 @@ export function MyTasksListView({
   }, [columns, draggingId]);
 
   useEffect(() => {
-    if (!reviewFlashId) return;
-    const t = window.setTimeout(() => setReviewFlashId(null), 1600);
+    if (!completeFlashId) return;
+    const t = window.setTimeout(() => setCompleteFlashId(null), 2200);
     return () => window.clearTimeout(t);
-  }, [reviewFlashId]);
+  }, [completeFlashId]);
 
   useEffect(() => {
     if (!hint) return;
@@ -174,9 +183,8 @@ export function MyTasksListView({
       }
 
       const from = source.droppableId as KanbanColumnId;
-      let to = destination.droppableId as KanbanColumnId;
+      const to = destination.droppableId as KanbanColumnId;
       const droppedOnDone = to === 'done';
-      if (droppedOnDone) to = 'review';
 
       const snapshot: ColumnsState = {
         todo: [...board.todo],
@@ -192,32 +200,89 @@ export function MyTasksListView({
         return;
       }
 
-      const destList = from === to ? srcList : [...snapshot[to]];
-      destList.splice(destination.index, 0, {
-        ...moved,
-        status: to === 'todo' ? 'todo' : to,
-      });
+      const effectiveTo: KanbanColumnId =
+        to === 'done' && moved.supervisor?.id ? 'review' : to;
+      const landedReview = effectiveTo === 'review' && to === 'done';
+
+      const destList =
+        from === effectiveTo ? srcList : [...snapshot[effectiveTo]];
+      destList.splice(
+        destination.index,
+        0,
+        applyColumnMove(moved, effectiveTo),
+      );
 
       setLocal({
         ...snapshot,
-        [from]: from === to ? destList : srcList,
-        [to]: destList,
+        [from]: from === effectiveTo ? destList : srcList,
+        [effectiveTo]: destList,
       });
       setError(null);
 
-      if (droppedOnDone) {
-        setReviewFlashId(moved.id);
+      if (landedReview) {
+        setCompleteFlashId(moved.id);
         setHint(t('myTasksPage.sentToReview'));
-        setCollapsed((c) => ({ ...c, review: false, done: false }));
+        setCollapsed((c) => ({ ...c, review: false }));
+      } else if (droppedOnDone) {
+        setCompleteFlashId(moved.id);
+        setHint(t('myTasksPage.movedToCompleted'));
+        setCollapsed((c) => ({ ...c, done: false }));
+      } else if (effectiveTo === 'review') {
+        setHint(t('myTasksPage.sentToReview'));
+        setCollapsed((c) => ({ ...c, review: false }));
+      } else if (from === 'done' && effectiveTo === 'todo') {
+        setHint(t('myTasksPage.resetToTodo'));
+        setCollapsed((c) => ({ ...c, [effectiveTo]: false }));
+      } else if (from === 'done') {
+        setHint(t('myTasksPage.leftCompleted'));
+        setCollapsed((c) => ({ ...c, [effectiveTo]: false }));
       }
 
-      if (from === to && !droppedOnDone) return;
+      if (from === effectiveTo && !droppedOnDone) return;
 
       try {
-        await onMoved(moved, droppedOnDone ? 'review' : to);
+        await onMoved(moved, effectiveTo);
       } catch (e) {
         setLocal(null);
-        setReviewFlashId(null);
+        setCompleteFlashId(null);
+        setError(e instanceof Error ? e.message : t('common.failed'));
+      }
+    },
+    [board, onMoved, t],
+  );
+
+  const finishTask = useCallback(
+    async (task: MyTaskItem) => {
+      const blocked = finishBlockReason(task);
+      if (blocked === 'done') return;
+      if (blocked) {
+        setError(
+          t(
+            blocked === 'notStarted'
+              ? 'myTasksPage.finishNeedStart'
+              : 'myTasksPage.finishNeedMilestones',
+          ),
+        );
+        return;
+      }
+      const dest = finishDestination(task);
+      setLocal(relocateTaskToColumn(board, task.id, dest));
+      setCompleteFlashId(task.id);
+      setHint(
+        dest === 'review'
+          ? t('myTasksPage.sentToReview')
+          : t('myTasksPage.movedToCompleted'),
+      );
+      setCollapsed((c) => ({
+        ...c,
+        [dest]: false,
+      }));
+      setError(null);
+      try {
+        await onMoved(task, dest);
+      } catch (e) {
+        setLocal(null);
+        setCompleteFlashId(null);
         setError(e instanceof Error ? e.message : t('common.failed'));
       }
     },
@@ -249,9 +314,9 @@ export function MyTasksListView({
             exit={{ opacity: 0 }}
             className="text-xs font-medium px-3 py-2 rounded-xl"
             style={{
-              background: 'rgba(244,63,94,0.12)',
-              color: '#FB7185',
-              border: '1px solid rgba(244,63,94,0.3)',
+              background: 'rgba(34,197,94,0.12)',
+              color: '#4ADE80',
+              border: '1px solid rgba(34,197,94,0.35)',
             }}
           >
             {hint}
@@ -272,6 +337,7 @@ export function MyTasksListView({
         }}
         onDragEnd={(r) => void handleDragEnd(r)}
       >
+        <LayoutGroup>
         {SECTIONS.map((sec) => {
           const tasks = board[sec.id] || [];
           const isCollapsed = !!collapsed[sec.id];
@@ -383,19 +449,31 @@ export function MyTasksListView({
                                     : 'grab',
                                 }}
                               >
+                                <motion.div
+                                  layoutId={
+                                    dragSnap.isDragging
+                                      ? undefined
+                                      : `my-task-${task.id}`
+                                  }
+                                  layout={!dragSnap.isDragging}
+                                  transition={{
+                                    type: 'spring',
+                                    stiffness: 380,
+                                    damping: 34,
+                                  }}
+                                >
                                 <ListRow
                                   task={task}
                                   index={index}
                                   isDark={isDark}
                                   accent={sec.accent}
                                   dragging={dragSnap.isDragging}
-                                  highlight={
-                                    reviewFlashId === task.id &&
-                                    sec.id === 'review'
-                                  }
+                                  completed={sec.id === 'done'}
+                                  highlight={completeFlashId === task.id}
                                   onOpen={() => {
                                     if (!dragSnap.isDragging) onOpen(task);
                                   }}
+                                  onFinish={() => void finishTask(task)}
                                   onToggleMilestone={
                                     onToggleMilestone
                                       ? (itemId) =>
@@ -403,6 +481,7 @@ export function MyTasksListView({
                                       : undefined
                                   }
                                 />
+                                </motion.div>
                               </div>
                             )}
                           </Draggable>
@@ -426,6 +505,7 @@ export function MyTasksListView({
             </section>
           );
         })}
+        </LayoutGroup>
       </DragDropContext>
       )}
     </div>
@@ -438,8 +518,10 @@ function ListRow({
   isDark,
   accent,
   dragging,
+  completed,
   highlight,
   onOpen,
+  onFinish,
   onToggleMilestone,
 }: {
   task: MyTaskItem;
@@ -447,8 +529,10 @@ function ListRow({
   isDark: boolean;
   accent: string;
   dragging: boolean;
+  completed?: boolean;
   highlight?: boolean;
   onOpen: () => void;
+  onFinish: () => void;
   onToggleMilestone?: (itemId: string) => void;
 }) {
   const { t } = useLang();
@@ -458,54 +542,117 @@ function ListRow({
   const priorityLabel = localizePriorityShort(task.priority || 'NONE', t);
   const desc = stripHtml(task.description);
   const assignees = task.assignees || [];
+  const supervisor = task.supervisor;
   const milestones = milestonesOf(task);
   const mDone = milestones.filter((m) => m.isDone).length;
   const mTotal = milestones.length;
+  const finished = completed || taskLooksCompleted(task);
+  const finishBlocked = finishBlockReason(task);
+  const placeColor = task.board.color || task.board.department?.color || accent;
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => {
-        if (!dragging) onOpen();
-      }}
-      onKeyDown={(e) => {
-        if (dragging) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className={`relative w-full text-start px-3 py-3 transition-shadow duration-200 border-b last:border-b-0 select-none ${GRID} max-lg:flex max-lg:flex-col max-lg:items-stretch max-lg:gap-2`}
+      className="group/task relative w-full text-start px-3 py-3 ps-4 transition-shadow duration-200 border-b last:border-b-0 select-none overflow-hidden"
       style={{
         background: highlight
-          ? hexToRgba('#F43F5E', isDark ? 0.12 : 0.08)
-          : tableRowBg(isDark, index),
-        borderColor: borderSubtle(isDark),
+          ? hexToRgba('#22C55E', isDark ? 0.2 : 0.14)
+          : finished
+            ? hexToRgba('#22C55E', isDark ? 0.1 : 0.06)
+            : tableRowBg(isDark, index),
+        borderColor: finished
+          ? hexToRgba('#22C55E', isDark ? 0.35 : 0.22)
+          : borderSubtle(isDark),
         boxShadow: dragging
           ? `0 12px 32px ${hexToRgba(accent, 0.28)}`
           : highlight
-            ? `inset 0 0 0 1px ${hexToRgba('#F43F5E', 0.45)}`
+            ? `inset 0 0 0 2px ${hexToRgba('#22C55E', 0.55)}`
             : undefined,
       }}
     >
+      <button
+        type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!dragging) onOpen();
+        }}
+        className="absolute top-2.5 end-2.5 z-10 inline-flex items-center justify-center w-8 h-8 rounded-lg opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 focus:opacity-100 transition-opacity cursor-pointer max-lg:opacity-100"
+        style={{
+          background: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.95)',
+          color: textSecondary(isDark),
+          border: `1px solid ${borderSubtle(isDark)}`,
+          boxShadow: isDark
+            ? '0 4px 14px rgba(0,0,0,0.35)'
+            : '0 4px 12px rgba(15,23,42,0.08)',
+        }}
+        title={t('board.editTask')}
+        aria-label={t('board.editTask')}
+      >
+        <MdEdit size={15} />
+      </button>
+      <span
+        className="absolute inset-y-0 start-0 w-1"
+        style={{ background: placeColor }}
+        aria-hidden
+      />
+      {highlight && (
+        <motion.span
+          initial={{ scale: 0.4, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="absolute -top-1.5 end-12 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold"
+          style={{ background: '#16A34A', color: '#fff' }}
+        >
+          <MdCheckCircle size={12} />
+          {t('myTasksPage.taskCompleted')}
+        </motion.span>
+      )}
+      <div
+        className={`${GRID} max-lg:flex max-lg:flex-col max-lg:items-stretch max-lg:gap-2`}
+      >
       {/* Task name */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-start gap-2 min-w-0 pe-8">
         <span
-          className="w-5 h-5 rounded-full inline-flex items-center justify-center shrink-0"
+          className="w-5 h-5 rounded-full inline-flex items-center justify-center shrink-0 mt-0.5"
           style={{
-            background: hexToRgba(accent, isDark ? 0.3 : 0.15),
-            color: accent,
+            background: hexToRgba(
+              finished ? '#22C55E' : accent,
+              isDark ? 0.3 : 0.15,
+            ),
+            color: finished ? '#22C55E' : accent,
           }}
         >
-          <MdRadioButtonUnchecked size={14} />
+          {finished ? (
+            <MdCheckCircle size={14} />
+          ) : (
+            <MdRadioButtonUnchecked size={14} />
+          )}
         </span>
-        <span
-          className="text-sm font-semibold truncate"
-          style={{ color: textPrimary(isDark) }}
-        >
-          {task.title}
-        </span>
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className="text-sm font-semibold truncate"
+              style={{
+                color: finished ? textMuted(isDark) : textPrimary(isDark),
+                textDecoration: finished ? 'line-through' : 'none',
+              }}
+            >
+              {task.title}
+            </span>
+            {finished && (
+              <span
+                className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                style={{
+                  background: hexToRgba('#22C55E', isDark ? 0.28 : 0.16),
+                  color: '#16A34A',
+                }}
+              >
+                {t('myTasksPage.taskCompleted')}
+              </span>
+            )}
+          </div>
+          <TaskPlaceChips task={task} isDark={isDark} />
+        </div>
       </div>
 
       {/* Description */}
@@ -515,15 +662,31 @@ function ListRow({
         title={desc || undefined}
       >
         {desc || (
-          <span style={{ color: textMuted(isDark) }}>
-            {task.board.name}
-          </span>
+          <span style={{ color: textMuted(isDark) }}>—</span>
         )}
       </p>
 
-      {/* Assignees */}
-      <div className="flex -space-x-2 max-lg:pl-7">
-        {assignees.length === 0 && (
+      {/* Assignees + supervisor */}
+      <div className="flex items-center gap-1.5 -space-x-0 max-lg:pl-7">
+        {supervisor && (
+          <span
+            title={`${t('boardTask.supervisor')}: ${supervisor.name}`}
+            className="w-7 h-7 rounded-full text-[9px] font-bold inline-flex items-center justify-center overflow-hidden me-1"
+            style={{
+              background: isDark ? '#1E293B' : '#E2E8F0',
+              color: textPrimary(isDark),
+              border: `2px solid ${isDark ? '#14b8a6' : '#14b8a6'}`,
+            }}
+          >
+            {supervisor.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={supervisor.avatarUrl} alt="" className="w-full h-full object-cover" />
+            ) : (
+              initials(supervisor.name)
+            )}
+          </span>
+        )}
+        {assignees.length === 0 && !supervisor && (
           <span className="text-[11px]" style={{ color: textMuted(isDark) }}>
             —
           </span>
@@ -662,14 +825,18 @@ function ListRow({
         {task.commentCount ?? 0}
       </span>
 
-      {/* Menu */}
-      <span
-        className="inline-flex justify-end max-lg:absolute max-lg:end-3 max-lg:top-3"
-        style={{ color: textMuted(isDark) }}
-        aria-hidden
-      >
-        <MdMoreVert size={18} />
-      </span>
+      {/* Edit column spacer (button is absolute) */}
+      <span className="hidden lg:block" aria-hidden />
+      </div>
+      {!finished && (
+        <div className="mt-2 max-lg:pl-7 lg:max-w-[220px]">
+          <MyTasksEndOfTask
+            isDark={isDark}
+            blocked={finishBlocked}
+            onFinish={onFinish}
+          />
+        </div>
+      )}
     </div>
   );
 }

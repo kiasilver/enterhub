@@ -198,6 +198,21 @@ export async function POST(req: Request, ctx: Ctx) {
     type: letter.type,
   });
 
+  try {
+    const { notifyUsers } = await import("@/lib/card-permissions");
+    await notifyUsers({
+      userIds: [letter.toUserId],
+      workspaceId,
+      actorId: session.user.id,
+      type: "letter.received",
+      title: letter.subject,
+      body: isReply ? "New reply on a letter" : "New letter for you",
+      href: `/workspace/${workspaceId}/chat`,
+    });
+  } catch (e) {
+    console.error("[letter] notify failed", e);
+  }
+
   const { publishBadgeRefresh } = await import("@/lib/badge-bus");
   publishBadgeRefresh({ workspaceId, userId: letter.toUserId });
 

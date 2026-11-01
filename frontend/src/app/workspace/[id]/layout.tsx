@@ -24,7 +24,14 @@ export default async function WorkspaceLayout({ children, params }: Props) {
 
   const workspace = await prisma.workspace.findUnique({
     where: { id },
-    select: { id: true, name: true },
+    select: {
+      id: true,
+      name: true,
+      logoUrl: true,
+      logoUrlDark: true,
+      logoColor: true,
+      showCompanyName: true,
+    },
   });
   if (!workspace) {
     redirect('/signin');
@@ -37,6 +44,12 @@ export default async function WorkspaceLayout({ children, params }: Props) {
       <WorkspaceShell
         workspaceId={workspace.id}
         workspaceName={workspace.name}
+        initialBranding={{
+          logoUrl: workspace.logoUrl,
+          logoUrlDark: workspace.logoUrlDark,
+          logoColor: workspace.logoColor,
+          showCompanyName: workspace.showCompanyName,
+        }}
         permissions={permissions}
         isSuperAdmin={Boolean(session.user.isSuperAdmin)}
         impersonating={Boolean(session.user.impersonating)}

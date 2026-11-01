@@ -25,6 +25,8 @@ export default function BoardSettingsPage() {
 
   const [tab, setTab] = useState<Tab>('general');
   const [workspaceId, setWorkspaceId] = useState('');
+  const [departmentKey, setDepartmentKey] = useState<string | null>(null);
+  const [departmentName, setDepartmentName] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('PRIVATE');
@@ -48,6 +50,8 @@ export default function BoardSettingsPage() {
     setDescription(json.data.description || '');
     setVisibility(json.data.visibility);
     setWorkspaceId(json.data.workspaceId);
+    setDepartmentKey(json.data.department?.key ?? 'general');
+    setDepartmentName(json.data.department?.name ?? null);
 
     const gRes = await fetch(`/api/boards/${boardId}/guests`);
     if (gRes.ok) {
@@ -117,6 +121,8 @@ export default function BoardSettingsPage() {
       workspaceId={workspaceId || 'x'}
       boardId={boardId}
       boardName={name || 'Settings'}
+      departmentKey={departmentKey}
+      departmentName={departmentName}
       canSettings={false}
     >
       <div className="space-y-6 max-w-2xl">

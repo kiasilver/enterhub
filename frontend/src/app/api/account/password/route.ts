@@ -24,7 +24,7 @@ export async function POST(req: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { passwordHash: true },
+    select: { passwordHash: true, mustChangePassword: true },
   });
   if (!user?.passwordHash) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
   const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12);
   await prisma.user.update({
     where: { id: session.user.id },
-    data: { passwordHash },
+    data: { passwordHash, mustChangePassword: false },
   });
 
   return NextResponse.json({ data: { ok: true } });

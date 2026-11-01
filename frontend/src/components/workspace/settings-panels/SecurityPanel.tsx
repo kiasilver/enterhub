@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import GlassButton from '@/components/SafeDashboard/GlassButton';
 import {
   SettingsGlassCard,
@@ -20,10 +21,11 @@ export default function SecurityPage() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
 
   const [enforce2FA, setEnforce2FA] = useState(false);
-  const [sessionTimeoutHours, setSessionTimeoutHours] = useState(24);
+  const [sessionTimeoutHours, setSessionTimeoutHours] = useState(168);
   const [ipText, setIpText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export default function SecurityPage() {
       }
       if (!res.ok) throw new Error(json.error || 'Failed');
       setEnforce2FA(Boolean(json.data.enforce2FA));
-      setSessionTimeoutHours(json.data.sessionTimeoutHours ?? 24);
+      setSessionTimeoutHours(json.data.sessionTimeoutHours ?? 168);
       const list = Array.isArray(json.data.ipAllowlist) ? json.data.ipAllowlist : [];
       setIpText(list.join('\n'));
     } catch (e) {
@@ -77,7 +79,7 @@ export default function SecurityPage() {
       setError(json.error || 'Save failed');
       return;
     }
-    setOk('Security settings saved');
+    setOk(t('settingsUi.securitySaved'));
   }
 
   const field = {
@@ -89,26 +91,26 @@ export default function SecurityPage() {
   return (
     <SettingsGlassCard accent="#ef4444" className="w-full max-w-xl">
       <SettingsSectionTitle
-        title="Security"
-        subtitle="Org policies — 2FA, session timeout, and IP allowlist."
-        badge="Secure"
+        title={t('settingsUi.securityTitle')}
+        subtitle={t('settingsUi.securitySubtitle')}
+        badge={t('settingsUi.securityBadge')}
         badgeColor="#ef4444"
       />
 
       {loading ? (
-        <p style={{ color: textMuted(isDark) }}>Loading…</p>
+        <p style={{ color: textMuted(isDark) }}>{t('common.loading')}</p>
       ) : error && error.startsWith('403') ? (
         <p className="text-red-500 text-sm">{error}</p>
       ) : (
         <form onSubmit={save} className="space-y-5">
           <label className="flex items-center gap-3 text-sm" style={{ color: textPrimary(isDark) }}>
             <input type="checkbox" checked={enforce2FA} onChange={(e) => setEnforce2FA(e.target.checked)} />
-            Enforce 2FA for all members
+            {t('settingsUi.enforce2fa')}
           </label>
 
           <div>
             <label className="text-sm font-medium block mb-1.5" style={{ color: textSecondary(isDark) }}>
-              Session timeout (hours)
+              {t('settingsUi.sessionTimeout')}
             </label>
             <input
               type="number"
@@ -123,7 +125,7 @@ export default function SecurityPage() {
 
           <div>
             <label className="text-sm font-medium block mb-1.5" style={{ color: textSecondary(isDark) }}>
-              IP allowlist (one CIDR per line)
+              {t('settingsUi.ipAllowlist')}
             </label>
             <textarea
               rows={4}
@@ -139,7 +141,7 @@ export default function SecurityPage() {
           {ok && <p className="text-sm text-green-500">{ok}</p>}
 
           <GlassButton type="submit" className="px-5 py-2.5 rounded-xl font-semibold">
-            Save policies
+            {t('settingsUi.savePolicies')}
           </GlassButton>
         </form>
       )}

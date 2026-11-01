@@ -21,6 +21,8 @@ import { textPrimary,
   borderSubtle,
   hexToRgba, panelFill } from '@/components/SafeDashboard/theme';
 import { safeReturnPath } from '@/lib/nav-from';
+import { localizedDepartmentLabel } from '@/lib/department-i18n';
+import { useBoardsLive } from '@/hooks/useBoardsLive';
 
 export default function DepartmentPageClient({
   workspaceId,
@@ -33,9 +35,10 @@ export default function DepartmentPageClient({
   const { t } = useLang();
   const isDark = theme === 'dark';
   const searchParams = useSearchParams();
+  const isGeneral = deptId === 'general';
   const backHref = safeReturnPath(
     searchParams.get('from'),
-    `/workspace/${workspaceId}/departments?view=list`,
+    `/workspace/${workspaceId}/boards?view=list&mode=kanban`,
   );
 
   const [data, setData] = useState<DeptData | null>(null);
@@ -43,27 +46,50 @@ export default function DepartmentPageClient({
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const res = await fetch(
         `/api/workspaces/${workspaceId}/departments/${deptId}`,
       );
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed to load');
+      if (!res.ok) throw new Error(json.error || t('common.loadFailed'));
       setData(json.data);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : t('common.loadFailed'));
       setData(null);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  }, [workspaceId, deptId]);
+  }, [workspaceId, deptId, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Keep KPIs / members chrome in sync when other tabs/users mutate
+  useBoardsLive(workspaceId, (ev) => {
+    if (
+      ev.type === 'department.changed' &&
+      ev.departmentId === deptId
+    ) {
+      void load({ silent: true });
+      return;
+    }
+    if (
+      (ev.type === 'board.changed' ||
+        ev.type === 'card.changed' ||
+        ev.type === 'board.archived' ||
+        ev.type === 'card.deleted') &&
+      (!('departmentId' in ev) ||
+        !ev.departmentId ||
+        ev.departmentId === deptId ||
+        deptId === 'general')
+    ) {
+      void load({ silent: true });
+    }
+  });
 
   const kpis = useMemo(() => {
     if (!data) return null;
@@ -114,9 +140,9 @@ export default function DepartmentPageClient({
               }}
             >
               <MdArrowBack size={16} />
-              Back
+              {t('common.back')}
             </Link>
-            {(data.canManage || data.canManageMembers) && (
+            {!isGeneral && (data.canManage || data.canManageMembers) && (
               <button
                 type="button"
                 onClick={() => setEditOpen(true)}
@@ -138,7 +164,7 @@ export default function DepartmentPageClient({
               className="text-[11px] font-semibold uppercase tracking-wider mb-1.5"
               style={{ color: textMuted(isDark) }}
             >
-              Department · Kanban
+              {t('projectsPage.sectionBreadcrumb')}
             </p>
             <h1
               className="text-xl sm:text-2xl font-bold flex items-center gap-2.5"
@@ -154,7 +180,9 @@ export default function DepartmentPageClient({
               >
                 <DepartmentIcon name={data.icon} deptKey={data.key} size={22} />
               </span>
-              <span className="truncate">{data.name}</span>
+              <span className="truncate">
+                {localizedDepartmentLabel(t, data.key, data.name)}
+              </span>
             </h1>
             <p className="text-sm mt-1.5" style={{ color: textSecondary(isDark) }}>
               {t('departmentsPage.projectsCount', { n: data.projects.length })} · {t('departmentsPage.tasksCount', { n: kpis?.total ?? 0 })}
@@ -168,12 +196,16 @@ export default function DepartmentPageClient({
             { label: t('departmentsPage.chipOpen'), value: kpis?.open ?? 0, color: '#3b82f6' },
             { label: t('departmentsPage.chipDone'), value: kpis?.done ?? 0, color: '#22c55e' },
             { label: t('departmentsPage.chipOverdue'), value: kpis?.overdue ?? 0, color: '#ef4444' },
-            {
-              label: t('departmentsPage.kpiPeople'),
-              value: data.members.length,
-              color: accent,
-              icon: true,
-            },
+            ...(!isGeneral
+              ? [
+                  {
+                    label: t('departmentsPage.kpiPeople'),
+                    value: data.members.length,
+                    color: accent,
+                    icon: true,
+                  },
+                ]
+              : []),
           ].map((s) => (
             <div
               key={s.label}
@@ -210,21 +242,23 @@ export default function DepartmentPageClient({
         workspaceId={workspaceId}
         deptId={deptId}
         data={data}
-        onReload={load}
+        onReload={() => load({ silent: true })}
         hideChrome
       />
 
-      <EditDepartmentDialog
-        open={editOpen}
-        workspaceId={workspaceId}
-        department={data}
-        canManage={!!data.canManage}
-        onClose={() => setEditOpen(false)}
-        onSaved={() => {
-          setEditOpen(false);
-          void load();
-        }}
-      />
+      {!isGeneral && (
+        <EditDepartmentDialog
+          open={editOpen}
+          workspaceId={workspaceId}
+          department={data}
+          canManage={!!data.canManage}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => {
+            setEditOpen(false);
+            void load({ silent: true });
+          }}
+        />
+      )}
     </div>
   );
 }

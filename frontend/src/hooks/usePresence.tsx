@@ -175,6 +175,23 @@ export function PresenceProvider({
       },
     );
 
+    sock.on(
+      'workspace:branding',
+      (payload: {
+        id?: string;
+        name?: string;
+        logoUrl?: string | null;
+        logoUrlDark?: string | null;
+        logoColor?: string | null;
+        showCompanyName?: boolean;
+      }) => {
+        if (!payload?.id || payload.id !== workspaceId) return;
+        window.dispatchEvent(
+          new CustomEvent('enterhub:branding', { detail: payload }),
+        );
+      },
+    );
+
     const onStorage = (e: StorageEvent) => {
       if (
         e.key === presenceStorageKey(workspaceId) &&

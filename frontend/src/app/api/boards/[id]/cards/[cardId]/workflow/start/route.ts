@@ -9,11 +9,12 @@ import {
   markChecklistBookend,
   moveCardToList,
   notifyWorkflow,
+  setChecklistBookend,
 } from "@/lib/card-workflow";
 
 type Ctx = { params: Promise<{ id: string; cardId: string }> };
 
-/** POST — employee starts work (requires due date + estimated hours). */
+/** POST — employee starts work (requires due date range). */
 export async function POST(_req: Request, ctx: Ctx) {
   const { session, error } = await assertWritableSession();
   if (error) return error;
@@ -51,9 +52,34 @@ export async function POST(_req: Request, ctx: Ctx) {
   }
 
   if (
+    card.workflowStatus === "PENDING_APPROVAL" ||
+    card.workflowStatus === "APPROVED"
+  ) {
+    const progress = await ensureProgressList(boardId);
+    await moveCardToList(cardId, progress.id);
+    await markChecklistBookend(cardId, "start");
+    await setChecklistBookend(cardId, "end", false);
+    const reopened = await prisma.card.update({
+      where: { id: cardId },
+      data: {
+        workflowStatus: "IN_PROGRESS",
+        startedAt: card.startedAt ?? new Date(),
+        submittedAt: null,
+        approvedAt: null,
+        approvedById: null,
+        rejectionNote: null,
+      },
+    });
+    return NextResponse.json({ data: reopened });
+  }
+
+  if (
     card.workflowStatus !== "ASSIGNED" &&
     card.workflowStatus !== "REJECTED"
   ) {
+    if (card.workflowStatus === "IN_PROGRESS") {
+      return NextResponse.json({ data: card });
+    }
     return NextResponse.json(
       { error: `Cannot start from status ${card.workflowStatus}` },
       { status: 400 },
@@ -79,9 +105,12 @@ export async function POST(_req: Request, ctx: Ctx) {
     },
   });
 
-  if (card.createdById) {
+  const watchIds = [card.createdById, card.supervisorId].filter(
+    (id): id is string => !!id,
+  );
+  if (watchIds.length) {
     await notifyWorkflow({
-      userIds: [card.createdById],
+      userIds: watchIds,
       workspaceId: board.workspaceId,
       boardId,
       cardId,

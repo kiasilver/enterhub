@@ -14,6 +14,7 @@ import {
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { localizeRoleName, planLabelForLocale } from '@/lib/role-i18n';
+import { useWorkspaceBranding } from '@/components/workspace/WorkspaceBranding';
 
 type WsRow = {
   workspace: {
@@ -23,6 +24,7 @@ type WsRow = {
     logoUrl?: string | null;
     logoUrlDark?: string | null;
     logoColor?: string | null;
+    showCompanyName?: boolean;
     planTier?: string;
   };
   role: { name: string };
@@ -42,6 +44,7 @@ export function WorkspaceSwitcher({
   const router = useRouter();
   const { primaryColor } = useTheme();
   const { t, lang } = useLang();
+  const live = useWorkspaceBranding();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<WsRow[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -66,8 +69,24 @@ export function WorkspaceSwitcher({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  const current = items.find((i) => i.workspace.id === currentId)?.workspace;
+  const current = (() => {
+    const row = items.find((i) => i.workspace.id === currentId)?.workspace;
+    if (!row) return undefined;
+    if (live && live.id === currentId) {
+      return {
+        ...row,
+        name: live.name,
+        logoUrl: live.logoUrl,
+        logoUrlDark: live.logoUrlDark,
+        logoColor: live.logoColor,
+        showCompanyName: live.showCompanyName,
+      };
+    }
+    return row;
+  })();
   const name = current?.name || t('workspaceSwitcher.defaultName');
+  const hasLogo = Boolean(current?.logoUrl || current?.logoUrlDark);
+  const showName = !hasLogo || current?.showCompanyName !== false;
   const planLabel = current?.planTier ? planLabelForLocale(current.planTier, lang) : null;
   const isHeader = variant === 'header';
 
@@ -79,8 +98,10 @@ export function WorkspaceSwitcher({
       <button
         type="button"
         onClick={() => setOpen((p) => !p)}
-        className={`flex items-center gap-2 rounded-xl text-start transition-colors ${
-          isHeader ? 'px-2 py-1.5 max-w-[280px] sm:max-w-[320px]' : 'w-full gap-2.5 px-2.5 py-2'
+        className={`inline-flex items-center rounded-xl text-start transition-colors ${
+          isHeader
+            ? 'gap-1 ps-3 pe-2 py-1.5 max-w-[280px] sm:max-w-[320px]'
+            : 'w-full gap-2.5 px-2.5 py-2'
         }`}
         style={{
           border: `1px solid ${borderSubtle(isDark)}`,
@@ -96,8 +117,9 @@ export function WorkspaceSwitcher({
           isDark={isDark}
           size={isHeader ? 28 : 32}
         />
-        <div className="min-w-0 flex-1">
-          <div className={`flex items-center gap-1.5 min-w-0 ${isHeader ? '' : ''}`}>
+        {showName && (
+        <div className={`min-w-0 ${isHeader ? '' : 'flex-1'}`}>
+          <div className="flex items-center gap-1.5 min-w-0">
             <p
               className={`font-semibold truncate ${isHeader ? 'text-xs sm:text-[13px]' : 'text-xs'}`}
               style={{ color: textPrimary(isDark) }}
@@ -125,6 +147,7 @@ export function WorkspaceSwitcher({
             </p>
           )}
         </div>
+        )}
         <svg
           width="12"
           height="12"
@@ -151,7 +174,16 @@ export function WorkspaceSwitcher({
           }}
         >
           {items.map((row) => {
-            const w = row.workspace;
+            const w =
+              live && row.workspace.id === live.id
+                ? {
+                    ...row.workspace,
+                    name: live.name,
+                    logoUrl: live.logoUrl,
+                    logoUrlDark: live.logoUrlDark,
+                    logoColor: live.logoColor,
+                  }
+                : row.workspace;
             const active = w.id === currentId;
             return (
               <button

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { MdDelete, MdLink, MdRefresh, MdSend } from 'react-icons/md';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { WidgetFrame } from '@/components/dashboards/WidgetFrame';
 import {
   SettingsGlassCard,
@@ -17,6 +18,7 @@ import {
   surfaceItem,
 } from '@/components/SafeDashboard/theme';
 import GlassButton from '@/components/SafeDashboard/GlassButton';
+import { EmailConnectGuide } from '@/components/email/EmailConnectGuide';
 import CustomSelect from '@/components/SafeDashboard/CustomSelect';
 
 type Status = {
@@ -57,6 +59,7 @@ export default function WorkspaceEmailSettingsPage() {
   const params = useParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
   const [status, setStatus] = useState<Status | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -184,16 +187,16 @@ export default function WorkspaceEmailSettingsPage() {
   return (
     <SettingsGlassCard accent="#06b6d4" className="w-full max-w-3xl">
       <SettingsSectionTitle
-        title="Email"
-        subtitle="Connect personal or org IMAP mailboxes for Inbox, plus platform SMTP for invites/OTP."
-        badge="Mail"
+        title={t('settingsUi.emailTitle')}
+        subtitle={t('settingsUi.emailSubtitle')}
+        badge={t('settings.email')}
         badgeColor="#06b6d4"
       />
 
       <div className="space-y-5">
-        <WidgetFrame title="Connected mailboxes" isDark={isDark}>
+        <WidgetFrame title={t('settingsUi.connectedMailboxes')} isDark={isDark}>
           <p className="text-xs mb-4" style={{ color: textMuted(isDark) }}>
-            Synced messages appear under Apps → Email alongside internal Nexus mail.
+            {t('settingsUi.emailHint')}
           </p>
 
           <ul className="space-y-2 mb-5">
@@ -213,8 +216,8 @@ export default function WorkspaceEmailSettingsPage() {
                   <p className="text-[11px]" style={{ color: textMuted(isDark) }}>
                     {a.imapHost}:{a.imapPort}
                     {a.lastSyncAt
-                      ? ` · synced ${new Date(a.lastSyncAt).toLocaleString()}`
-                      : ' · never synced'}
+                      ? ` · ${t('settingsUi.syncedAt', { when: new Date(a.lastSyncAt).toLocaleString() })}`
+                      : ` · ${t('settingsUi.neverSynced')}`}
                   </p>
                   {a.lastError && (
                     <p className="text-[11px] text-red-500 mt-0.5">{a.lastError}</p>
@@ -240,12 +243,12 @@ export default function WorkspaceEmailSettingsPage() {
                 </div>
               </li>
             ))}
-            {accounts.length === 0 && (
-              <p className="text-sm" style={{ color: textMuted(isDark) }}>
-                No mailboxes connected yet
-              </p>
-            )}
           </ul>
+          {accounts.length === 0 && (
+            <div className="mb-5">
+              <EmailConnectGuide workspaceId={workspaceId} isDark={isDark} hideSettingsLink />
+            </div>
+          )}
 
           <form onSubmit={(e) => void connectMailbox(e)} className="space-y-3">
             <div className="grid sm:grid-cols-2 gap-3">
@@ -253,16 +256,16 @@ export default function WorkspaceEmailSettingsPage() {
                 value={form.scope}
                 onChange={(v) => setForm((f) => ({ ...f, scope: v as 'PERSONAL' | 'ORG' }))}
                 options={[
-                  { value: 'PERSONAL', label: 'Personal mailbox' },
+                  { value: 'PERSONAL', label: t('settingsUi.personalMailbox') },
                   ...(canManageOrg
-                    ? [{ value: 'ORG', label: 'Organization mailbox' }]
+                    ? [{ value: 'ORG', label: t('settingsUi.orgMailbox') }]
                     : []),
                 ]}
                 isDark={isDark}
                 className="w-full"
               />
               <input
-                placeholder="Label (optional)"
+                placeholder={t('settingsUi.labelOptional')}
                 value={form.label}
                 onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
                 className="px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -272,7 +275,7 @@ export default function WorkspaceEmailSettingsPage() {
             <input
               required
               type="email"
-              placeholder="Email address"
+              placeholder={t('settingsUi.emailAddress')}
               value={form.emailAddress}
               onChange={(e) => setForm((f) => ({ ...f, emailAddress: e.target.value }))}
               className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -281,7 +284,7 @@ export default function WorkspaceEmailSettingsPage() {
             <div className="grid sm:grid-cols-3 gap-3">
               <input
                 required
-                placeholder="IMAP host"
+                placeholder={t('settingsUi.imapHost')}
                 value={form.imapHost}
                 onChange={(e) => setForm((f) => ({ ...f, imapHost: e.target.value }))}
                 className="sm:col-span-2 px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -289,7 +292,7 @@ export default function WorkspaceEmailSettingsPage() {
               />
               <input
                 type="number"
-                placeholder="Port"
+                placeholder={t('settingsUi.port')}
                 value={form.imapPort}
                 onChange={(e) => setForm((f) => ({ ...f, imapPort: Number(e.target.value) }))}
                 className="px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -299,7 +302,7 @@ export default function WorkspaceEmailSettingsPage() {
             <div className="grid sm:grid-cols-2 gap-3">
               <input
                 required
-                placeholder="Username"
+                placeholder={t('settingsUi.username')}
                 value={form.username}
                 onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
                 className="px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -308,7 +311,7 @@ export default function WorkspaceEmailSettingsPage() {
               <input
                 required
                 type="password"
-                placeholder="Password / app password"
+                placeholder={t('settingsUi.passwordApp')}
                 value={form.password}
                 onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                 className="px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -316,7 +319,7 @@ export default function WorkspaceEmailSettingsPage() {
               />
             </div>
             <input
-              placeholder="SMTP host (optional, for later send)"
+              placeholder={t('settingsUi.smtpOptional')}
               value={form.smtpHost}
               onChange={(e) => setForm((f) => ({ ...f, smtpHost: e.target.value }))}
               className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
@@ -327,15 +330,15 @@ export default function WorkspaceEmailSettingsPage() {
               disabled={busy}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold"
             >
-              <MdLink size={16} /> {busy ? 'Saving…' : 'Connect mailbox'}
+              <MdLink size={16} /> {busy ? t('common.saving') : t('settingsUi.connectMailbox')}
             </GlassButton>
           </form>
         </WidgetFrame>
 
-        <WidgetFrame title="Platform SMTP status" isDark={isDark}>
+        <WidgetFrame title={t('settingsUi.smtpStatus')} isDark={isDark}>
           {!status ? (
             <p className="text-sm" style={{ color: textMuted(isDark) }}>
-              Loading…
+              {t('common.loading')}
             </p>
           ) : (
             <ul className="text-sm space-y-2">
@@ -357,7 +360,7 @@ export default function WorkspaceEmailSettingsPage() {
           )}
         </WidgetFrame>
 
-        <WidgetFrame title="Send test (platform SMTP)" isDark={isDark}>
+        <WidgetFrame title={t('settingsUi.sendTest')} isDark={isDark}>
           <form onSubmit={sendTest} className="flex flex-col sm:flex-row gap-3">
             <input
               type="email"
@@ -372,7 +375,7 @@ export default function WorkspaceEmailSettingsPage() {
               disabled={busy}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold"
             >
-              <MdSend size={14} /> {busy ? 'Sending…' : 'Send test'}
+              <MdSend size={14} /> {busy ? t('common.sending') : t('settingsUi.sendTestBtn')}
             </GlassButton>
           </form>
           {msg && (

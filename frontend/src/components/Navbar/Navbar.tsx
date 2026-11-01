@@ -16,7 +16,7 @@ export default function Navbar() {
 
   // Close menu on resize to desktop
   useEffect(() => {
-    const handler = () => { if (window.innerWidth >= 768) setMobileOpen(false); };
+    const handler = () => { if (window.innerWidth >= 1024) setMobileOpen(false); };
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, []);
@@ -30,6 +30,7 @@ export default function Navbar() {
   const navLinks = [
     { href: '/#features', label: t('nav.features') },
     { href: '/#learn', label: t('nav.learn') },
+    { href: '/guide', label: t('nav.guide') },
     { href: '/#plans', label: t('nav.plans') },
     { href: '/#stories', label: t('nav.customers') },
     { href: '/contact', label: t('nav.contact') },
@@ -54,7 +55,7 @@ export default function Navbar() {
         />
 
         {/* Nav links – desktop only */}
-        <div className="hidden md:flex items-center justify-center gap-2 absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+        <div className="hidden lg:flex items-center justify-center gap-2 absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           {navLinks.map(({ href, label }) => (
             <NavLink key={href} href={href} label={label} />
           ))}
@@ -66,7 +67,7 @@ export default function Navbar() {
           <ThemeToggle />
 
           {/* Desktop auth buttons */}
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden lg:flex items-center gap-2">
             <Link
               href="/signin"
               className="text-sm font-semibold px-4 py-2 rounded-full transition-colors duration-200"
@@ -90,7 +91,7 @@ export default function Navbar() {
           {/* Hamburger – mobile only */}
           <button
             id="nav-hamburger"
-            className="md:hidden flex flex-col gap-1.5 p-2 min-h-[44px] min-w-[44px] items-center justify-center rounded-lg transition-all duration-150"
+            className="lg:hidden flex flex-col gap-1.5 p-2 min-h-[44px] min-w-[44px] items-center justify-center rounded-lg transition-all duration-150"
             onClick={() => setMobileOpen(p => !p)}
             aria-label={t('nav.toggleMenu')}
             style={{ color: theme === 'dark' ? 'white' : '#0a0a0a' }}
@@ -127,7 +128,7 @@ export default function Navbar() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 md:hidden"
+              className="fixed inset-0 z-40 lg:hidden"
               style={{ backgroundColor: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)' }}
               onClick={() => setMobileOpen(false)}
             />
@@ -138,7 +139,7 @@ export default function Navbar() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.25, ease: 'easeOut' }}
-              className="fixed top-[65px] left-3 right-3 z-50 md:hidden rounded-2xl overflow-hidden"
+              className="fixed top-[65px] left-3 right-3 z-50 lg:hidden rounded-2xl overflow-hidden"
               style={{
                 backgroundColor: theme === 'dark' ? 'var(--elevated)' : 'rgba(255,255,255,0.98)',
                 border: theme === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(0,0,0,0.1)',

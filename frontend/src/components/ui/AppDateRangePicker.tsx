@@ -11,17 +11,11 @@ import { textPrimary,
   borderSubtle,
   hexToRgba, panelFill } from '@/components/SafeDashboard/theme';
 import { formatDateInput, parseDateInput } from '@/components/ui/AppDatePicker';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
+import { toFaDigits } from '@/lib/app-date';
 
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-
-function pad(n: number) {
-  return String(n).padStart(2, '0');
-}
 
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -51,10 +45,6 @@ function buildMonthGrid(view: Date): Date[] {
   return cells;
 }
 
-function fmtShort(d: Date) {
-  return `${pad(d.getDate())} ${MONTHS_SHORT[d.getMonth()]}`;
-}
-
 export type DateRangeValue = { start: string; end: string };
 
 type Props = {
@@ -73,13 +63,17 @@ type Props = {
 export function AppDateRangePicker({
   value,
   onChange,
-  placeholder = 'Start  →  End',
+  placeholder,
   disabled = false,
   className = '',
   isDark: isDarkProp,
 }: Props) {
   const { theme, primaryColor } = useTheme();
+  const { t, lang } = useLang();
+  const { formatDate } = useCalendar();
   const isDark = isDarkProp ?? theme === 'dark';
+  const rangePlaceholder = placeholder || t('boardTask.dueRangePlaceholder');
+  const weekdays = lang === 'fa' ? ['د', 'س', 'چ', 'پ', 'ج', 'ش', 'ی'] : WEEKDAYS;
   const accent = primaryColor || '#2563EB';
 
   const [open, setOpen] = useState(false);
@@ -187,9 +181,9 @@ export function AppDateRangePicker({
 
   const label =
     start && end
-      ? `${fmtShort(start)}  →  ${fmtShort(end)}`
+      ? `${formatDate(start, 'short')}  →  ${formatDate(end, 'short')}`
       : start
-        ? `${fmtShort(start)}  →  …`
+        ? `${formatDate(start, 'short')}  →  …`
         : null;
 
   const pri = textPrimary(isDark);
@@ -223,7 +217,7 @@ export function AppDateRangePicker({
         }}
       >
         <MdCalendarMonth size={16} style={{ color: open ? accent : mut }} className="shrink-0" />
-        <span className="flex-1 text-left truncate">{label || placeholder}</span>
+        <span className="flex-1 text-start truncate">{label || rangePlaceholder}</span>
         {(value.start || value.end) && !disabled && (
           <span
             role="button"
@@ -241,7 +235,7 @@ export function AppDateRangePicker({
                 onChange({ start: '', end: '' });
               }
             }}
-            aria-label="Clear dates"
+            aria-label={t('common.clearDates')}
           >
             <MdClose size={14} />
           </span>
@@ -268,27 +262,27 @@ export function AppDateRangePicker({
                   ? '0 12px 36px rgba(0,0,0,0.45)'
                   : '0 12px 36px rgba(0,0,0,0.12)',
               }}
-              className="p-4 rounded-2xl"
+              className="p-4 rounded-2xl text-start"
             >
               <p className="text-[11px] font-medium mb-3" style={{ color: mut }}>
-                Pick start, then end
+                {t('boardTask.pickStartThenEnd')}
               </p>
 
               <div className="flex items-center justify-between mb-3 px-1">
                 <button
                   type="button"
-                  className="w-8 h-8 flex items-center justify-center rounded-lg"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg rtl:rotate-180"
                   style={{ color: sec }}
                   onClick={() => setView((v) => addMonths(v, -1))}
                 >
                   <MdChevronLeft size={20} />
                 </button>
                 <span className="text-[14px] font-bold" style={{ color: pri }}>
-                  {MONTHS[view.getMonth()]} {view.getFullYear()}
+                  {formatDate(view, 'monthYear')}
                 </span>
                 <button
                   type="button"
-                  className="w-8 h-8 flex items-center justify-center rounded-lg"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg rtl:rotate-180"
                   style={{ color: sec }}
                   onClick={() => setView((v) => addMonths(v, 1))}
                 >
@@ -296,8 +290,8 @@ export function AppDateRangePicker({
                 </button>
               </div>
 
-              <div className="grid grid-cols-7 mb-1">
-                {WEEKDAYS.map((w) => (
+              <div className="grid grid-cols-7 mb-1" dir="ltr">
+                {weekdays.map((w) => (
                   <div
                     key={w}
                     className="h-7 flex items-center justify-center text-[10px] font-semibold uppercase"
@@ -308,7 +302,7 @@ export function AppDateRangePicker({
                 ))}
               </div>
 
-              <div className="grid grid-cols-7">
+              <div className="grid grid-cols-7" dir="ltr">
                 {cells.map((day, i) => {
                   const otherMonth = day.getMonth() !== view.getMonth();
                   const isStart = sameDay(day, rangeStart);
@@ -359,7 +353,7 @@ export function AppDateRangePicker({
                           if (!filled) e.currentTarget.style.background = 'transparent';
                         }}
                       >
-                        {day.getDate()}
+                        {lang === 'fa' ? toFaDigits(String(day.getDate())) : day.getDate()}
                       </button>
                     </div>
                   );
@@ -380,20 +374,20 @@ export function AppDateRangePicker({
                     setOpen(false);
                   }}
                 >
-                  Clear
+                  {t('common.clear')}
                 </button>
                 <button
                   type="button"
                   className="text-[11px] font-semibold hover:underline"
                   style={{ color: accent }}
                   onClick={() => {
-                    const t = new Date();
-                    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+                    const now = new Date();
+                    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                     setView(startOfMonth(d));
                     setDraft({ start: d, end: null });
                   }}
                 >
-                  Today
+                  {t('common.today')}
                 </button>
               </div>
             </motion.div>

@@ -60,6 +60,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const canApprove =
     caps.role === "board_admin" ||
     caps.role === "creator" ||
+    caps.role === "supervisor" ||
     caps.canMoveToDone;
   if (!canApprove) {
     return NextResponse.json(

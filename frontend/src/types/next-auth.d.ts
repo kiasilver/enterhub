@@ -10,6 +10,7 @@ declare module "next-auth" {
       impersonatorId?: string;
       /** App session id (DB Session.jti) — not Auth.js JWT `jti`. */
       sessionJti?: string;
+      mustChangePassword?: boolean;
     };
   }
 
@@ -17,6 +18,7 @@ declare module "next-auth" {
     isSuperAdmin?: boolean;
     sessionJti?: string;
     sessionExpiresAt?: string;
+    mustChangePassword?: boolean;
   }
 }
 
@@ -29,5 +31,6 @@ declare module "next-auth/jwt" {
     impersonating?: boolean;
     impersonatorId?: string;
     error?: string;
+    mustChangePassword?: boolean;
   }
 }

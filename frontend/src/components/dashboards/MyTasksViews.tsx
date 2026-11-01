@@ -29,6 +29,8 @@ import { MyTasksListView } from '@/components/dashboards/MyTasksListView';
 import { useCalendar } from '@/components/CalendarProvider/CalendarProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { getJalaliParts } from '@/lib/app-date';
+import { isChecklistEnd } from '@/lib/checklist-defaults';
+import { localizeProjectName } from '@/lib/list-i18n';
 
 export type MyTaskItem = {
   id: string;
@@ -43,10 +45,22 @@ export type MyTaskItem = {
   startedAt?: string | null;
   estimatedHours?: number | null;
   list: { id: string; title: string };
-  board: { id: string; name: string };
+  board: {
+    id: string;
+    name: string;
+    color?: string | null;
+    isGeneral?: boolean;
+    department?: {
+      id: string;
+      name: string;
+      key: string;
+      color: string;
+    } | null;
+  };
   labels?: { id: string; name: string; color: string }[];
   checklist?: { done: number; total: number };
-  checklistItems?: { id: string; title: string; isDone: boolean }[];
+  checklistItems?: { id: string; title: string; isDone: boolean; description?: string | null }[];
+  supervisor?: { id: string; name: string; avatarUrl?: string | null } | null;
   assignees?: { id: string; name: string; avatarUrl?: string | null }[];
   commentCount?: number;
   attachmentCount?: number;
@@ -173,23 +187,27 @@ export function MyTasksViews({
 
   const projectOptions = useMemo(() => {
     const map = new Map<string, string>();
-    for (const t of data.tasks) map.set(t.board.id, t.board.name);
+    for (const item of data.tasks) {
+      map.set(
+        item.board.id,
+        localizeProjectName(item.board.name, t, item.board.isGeneral),
+      );
+    }
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [data.tasks]);
+  }, [data.tasks, t]);
 
   const moveTaskToColumn = useCallback(
     async (task: MyTaskItem, to: KanbanColumnId) => {
+      const effective: KanbanColumnId =
+        to === 'done' && task.supervisor?.id ? 'review' : to;
       const base = `/api/boards/${task.board.id}/cards/${task.id}`;
       let res: Response;
-      if (to === 'progress') {
-        // Marks Start task checklist + moves to In Progress
-        res = await fetch(`${base}/workflow/start`, { method: 'POST' });
-      } else if (to === 'review' || to === 'done') {
-        // Done drop → submit for creator approval (Review). Marks End of task.
-        res = await fetch(`${base}/workflow/submit`, { method: 'POST' });
-      } else {
-        throw new Error(t('myTasksPage.moveBackHint'));
-      }
+      res = await fetch(`${base}/workflow/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: effective }),
+        cache: 'no-store',
+      });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || t('common.failed'));
       await onRefresh();
@@ -201,6 +219,18 @@ export function MyTasksViews({
     async (task: MyTaskItem, itemId: string) => {
       const item = task.checklistItems?.find((i) => i.id === itemId);
       if (!item) return;
+      if (isChecklistEnd(item.title)) {
+        if (item.isDone) return;
+        try {
+          await moveTaskToColumn(
+            task,
+            task.supervisor?.id ? 'review' : 'done',
+          );
+        } catch (e) {
+          alert(e instanceof Error ? e.message : t('common.failed'));
+        }
+        return;
+      }
       const next = !item.isDone;
       onChecklistPatch?.(task.id, itemId, next);
       try {
@@ -215,14 +245,14 @@ export function MyTasksViews({
         if (!res.ok) {
           onChecklistPatch?.(task.id, itemId, item.isDone);
           const json = await res.json().catch(() => ({}));
-          throw new Error(json.error || 'Could not update milestone');
+          throw new Error(json.error || t('common.failed'));
         }
       } catch (e) {
         onChecklistPatch?.(task.id, itemId, item.isDone);
         alert(e instanceof Error ? e.message : 'Could not update milestone');
       }
     },
-    [onChecklistPatch],
+    [onChecklistPatch, moveTaskToColumn, t],
   );
 
   const runningTasks = useMemo(
@@ -290,9 +320,9 @@ export function MyTasksViews({
               border: `1px solid ${borderSubtle(isDark)}`,
               color: textSecondary(isDark),
             }}
-            aria-label={t('projectsPage.allProjects')}
+            aria-label={t('myTasksPage.allProjects')}
           >
-            <option value="all">{t('projectsPage.allProjects')}</option>
+            <option value="all">{t('myTasksPage.allProjects')}</option>
             {projectOptions.map(([id, name]) => (
               <option key={id} value={id}>
                 {name}
@@ -435,13 +465,11 @@ export function MyTasksViews({
           boardId={detail.boardId}
           cardId={detail.cardId}
           open
-          onClose={() => {
-            setDetail(null);
-            void onRefresh();
-          }}
+          onClose={() => setDetail(null)}
           onChanged={() => {
             void onRefresh();
           }}
+          onDeleted={() => setDetail(null)}
         />
       )}
     </div>

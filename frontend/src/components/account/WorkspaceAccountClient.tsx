@@ -10,6 +10,7 @@ import {
 } from '@/components/account/AccountShell';
 import { AccountProfile } from '@/components/account/AccountProfile';
 import { AccountSettings } from '@/components/account/AccountSettings';
+import { AccountNotifications } from '@/components/account/AccountNotifications';
 import { AccountHelp } from '@/components/account/AccountHelp';
 import { usePresence } from '@/hooks/usePresence';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
@@ -21,14 +22,17 @@ function AccountInner() {
   const workspaceId = String(params.id);
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, update: updateSession } = useSession();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const { status: presenceStatus } = usePresence(workspaceId, session?.user?.id);
 
   const tabParam = searchParams.get('tab');
   const initial: AccountTab =
-    tabParam === 'settings' || tabParam === 'help' || tabParam === 'profile'
+    tabParam === 'settings' ||
+    tabParam === 'help' ||
+    tabParam === 'profile' ||
+    tabParam === 'notifications'
       ? tabParam
       : 'profile';
   const [tab, setTab] = useState<AccountTab>(initial);
@@ -39,7 +43,14 @@ function AccountInner() {
 
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t === 'settings' || t === 'help' || t === 'profile') setTab(t);
+    if (
+      t === 'settings' ||
+      t === 'help' ||
+      t === 'profile' ||
+      t === 'notifications'
+    ) {
+      setTab(t);
+    }
   }, [searchParams]);
 
   useEffect(() => {
@@ -74,9 +85,14 @@ function AccountInner() {
         avatarUrl={avatarUrl}
         presenceStatus={presenceStatus as PresenceStatus}
         subtitle={t('account.personalAccount')}
+        onAvatarChange={(url) => {
+          setAvatarUrl(url);
+          void updateSession();
+        }}
       >
         {tab === 'profile' && <AccountProfile isDark={isDark} />}
         {tab === 'settings' && <AccountSettings isDark={isDark} />}
+        {tab === 'notifications' && <AccountNotifications isDark={isDark} />}
         {tab === 'help' && <AccountHelp isDark={isDark} workspaceId={workspaceId} />}
       </AccountShell>
     </div>

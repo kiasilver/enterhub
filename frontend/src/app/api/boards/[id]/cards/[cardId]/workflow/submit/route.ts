@@ -4,18 +4,15 @@ import { canAccessBoard } from "@/lib/board-access";
 import { assertWritableSession } from "@/lib/session-guards";
 import { resolveCardCapabilities } from "@/lib/card-permissions";
 import {
-  checklistAllDone,
-  ensureReviewList,
+  applyWorkflowColumn,
   managerUserIds,
-  markChecklistBookend,
-  moveCardToList,
   notifyWorkflow,
 } from "@/lib/card-workflow";
 
 type Ctx = { params: Promise<{ id: string; cardId: string }> };
 
 /**
- * POST — employee marks work complete → Pending Approval.
+ * POST — employee marks work complete → On Review (pending approval).
  * Requires all checklist items done (or no checklist).
  */
 export async function POST(_req: Request, ctx: Ctx) {
@@ -54,48 +51,26 @@ export async function POST(_req: Request, ctx: Ctx) {
     );
   }
 
-  if (card.workflowStatus !== "IN_PROGRESS") {
-    return NextResponse.json(
-      { error: "Start the task before submitting for approval" },
-      { status: 400 },
-    );
+  const alreadyFinished =
+    card.workflowStatus === "PENDING_APPROVAL" ||
+    card.workflowStatus === "APPROVED";
+  const updated = await applyWorkflowColumn(boardId, card, "review");
+
+  if (!alreadyFinished) {
+    const managers = await managerUserIds(board.workspaceId, card.createdById, [
+      card.supervisorId,
+    ]);
+    await notifyWorkflow({
+      userIds: managers,
+      workspaceId: board.workspaceId,
+      boardId,
+      cardId,
+      actorId: session.user.id,
+      type: "task.pending_approval",
+      title: `Approval needed: “${card.title}”`,
+      body: "Employee submitted work for your approval and evaluation",
+    });
   }
-
-  // Dropping onto Done / submitting marks the End bookend, then requires all items.
-  await markChecklistBookend(cardId, "end");
-
-  const chk = await checklistAllDone(cardId);
-  if (!chk.complete) {
-    return NextResponse.json(
-      {
-        error: `Complete all checklist milestones first (${chk.done}/${chk.total})`,
-      },
-      { status: 400 },
-    );
-  }
-
-  const review = await ensureReviewList(boardId);
-  await moveCardToList(cardId, review.id);
-
-  const updated = await prisma.card.update({
-    where: { id: cardId },
-    data: {
-      workflowStatus: "PENDING_APPROVAL",
-      submittedAt: new Date(),
-    },
-  });
-
-  const managers = await managerUserIds(board.workspaceId, card.createdById);
-  await notifyWorkflow({
-    userIds: managers,
-    workspaceId: board.workspaceId,
-    boardId,
-    cardId,
-    actorId: session.user.id,
-    type: "task.pending_approval",
-    title: `Approval needed: “${card.title}”`,
-    body: "Employee submitted work for your approval and evaluation",
-  });
 
   return NextResponse.json({ data: updated });
 }

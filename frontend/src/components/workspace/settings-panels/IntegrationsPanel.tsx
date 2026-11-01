@@ -10,6 +10,7 @@ import {
   MdOpenInNew,
 } from 'react-icons/md';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import {
   SettingsGlassCard,
   SettingsSectionTitle,
@@ -59,6 +60,7 @@ export default function IntegrationsPanel() {
   const searchParams = useSearchParams();
   const workspaceId = String(params.id);
   const { theme } = useTheme();
+  const { t } = useLang();
   const isDark = theme === 'dark';
 
   const [status, setStatus] = useState<StatusPayload | null>(null);
@@ -240,8 +242,8 @@ export default function IntegrationsPanel() {
         <div className="flex flex-col sm:flex-row sm:items-start gap-4 justify-between">
           <div className="min-w-0 flex-1">
             <SettingsSectionTitle
-              title="Google Sheets"
-              subtitle="Live export, bulk import, and sync links for boards. Files are created in your Google Drive via OAuth."
+              title={t('settingsUi.sheetsTitle')}
+              subtitle={t('settingsUi.sheetsSubtitle')}
               badge="OAuth"
               badgeColor="#22c55e"
             />
@@ -316,8 +318,8 @@ export default function IntegrationsPanel() {
         <>
           <SettingsGlassCard accent="#22c55e">
             <SettingsSectionTitle
-              title="Live export"
-              subtitle="Create a spreadsheet in your Drive from a board or your assigned tasks."
+              title={t('settingsUi.liveExport')}
+              subtitle={t('settingsUi.liveExportHint')}
             />
             <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
               <label className="flex-1 text-xs space-y-1.5" style={{ color: textMuted(isDark) }}>
@@ -350,8 +352,8 @@ export default function IntegrationsPanel() {
 
           <SettingsGlassCard accent="#3b82f6">
             <SettingsSectionTitle
-              title="Bulk import"
-              subtitle="Paste a Spreadsheet ID (from the URL) and import rows as cards. Existing Card IDs on the board are skipped."
+              title={t('settingsUi.bulkImport')}
+              subtitle={t('settingsUi.bulkImportHint')}
             />
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs space-y-1.5" style={{ color: textMuted(isDark) }}>
@@ -402,8 +404,8 @@ export default function IntegrationsPanel() {
           {conn && conn.syncLinks.length > 0 && (
             <SettingsGlassCard>
               <SettingsSectionTitle
-                title="Recent sync links"
-                subtitle="Export/import bindings for two-way sync (polling coming next)."
+                title={t('settingsUi.recentSync')}
+                subtitle={t('settingsUi.recentSyncHint')}
               />
               <ul className="space-y-2">
                 {conn.syncLinks.map((link) => (

@@ -10,7 +10,7 @@ import {
 } from "@/lib/board-access";
 import { notifyUsers } from "@/lib/card-permissions";
 import { emitToBoardRoom } from "@/lib/socket-emit";
-import { DEFAULT_CHECKLIST } from "@/lib/checklist-defaults";
+import { normalizeChecklistCreate } from "@/lib/checklist-defaults";
 import { parseCardDateInput } from "@/lib/card-dates";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -42,7 +42,20 @@ export async function GET(_req: Request, context: Ctx) {
         where: { archivedAt: null },
         orderBy: { order: "asc" },
         include: {
-          assignees: { select: { userId: true } },
+          assignees: {
+            select: {
+              userId: true,
+              user: {
+                select: { id: true, name: true, email: true, avatarUrl: true },
+              },
+            },
+          },
+          supervisor: {
+            select: { id: true, name: true, email: true, avatarUrl: true },
+          },
+          createdBy: {
+            select: { id: true, name: true, email: true, avatarUrl: true },
+          },
           comments: {
             select: { id: true, body: true, authorId: true, createdAt: true },
             take: 20,
@@ -51,12 +64,16 @@ export async function GET(_req: Request, context: Ctx) {
           attachments: {
             select: { id: true, fileName: true, fileUrl: true, mimeType: true },
           },
-          checklistItems: true,
+          checklistItems: {
+            orderBy: { order: "asc" },
+            select: { id: true, title: true, isDone: true, description: true },
+          },
           labels: {
             include: {
               label: { select: { id: true, name: true, color: true } },
             },
           },
+          _count: { select: { comments: true, attachments: true } },
         },
       },
     },
@@ -110,11 +127,23 @@ const createSchema = z.object({
   dueDate: z.string().optional().nullable(),
   /** Range start (`YYYY-MM-DD`) */
   startDate: z.string().optional().nullable(),
-  /** Manager-set expected effort in hours (required when assigning) */
+  /** Optional expected effort in hours */
   estimatedHours: z.number().positive().max(1000).optional().nullable(),
   assignToSelf: z.boolean().optional(),
   assigneeIds: z.array(z.string().min(1)).max(50).optional(),
-  checklist: z.array(z.string().min(1).max(300)).max(50).optional(),
+  supervisorId: z.string().min(1).optional().nullable(),
+  checklist: z
+    .array(
+      z.union([
+        z.string().min(1).max(300),
+        z.object({
+          title: z.string().min(1).max(300),
+          description: z.string().max(2000).optional().nullable(),
+        }),
+      ]),
+    )
+    .max(50)
+    .optional(),
   labelIds: z.array(z.string().min(1)).max(20).optional(),
   priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
   attachments: z
@@ -148,7 +177,7 @@ export async function POST(req: Request, context: Ctx) {
 
   const board = await prisma.board.findUnique({
     where: { id: boardId },
-    select: { workspaceId: true },
+    select: { workspaceId: true, departmentId: true },
   });
   if (!board) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -223,15 +252,6 @@ export async function POST(req: Request, context: Ctx) {
         { status: 400 },
       );
     }
-    if (
-      parsed.data.estimatedHours == null ||
-      parsed.data.estimatedHours <= 0
-    ) {
-      return NextResponse.json(
-        { error: "Estimated hours are required when assigning a task" },
-        { status: 400 },
-      );
-    }
     const members = await prisma.workspaceMember.findMany({
       where: {
         workspaceId: board.workspaceId,
@@ -250,6 +270,26 @@ export async function POST(req: Request, context: Ctx) {
       }
     }
   }
+
+  let supervisorId: string | null = parsed.data.supervisorId || null;
+  if (supervisorId) {
+    const supervisor = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId: board.workspaceId,
+        userId: supervisorId,
+        status: "ACTIVE",
+      },
+      select: { userId: true },
+    });
+    if (!supervisor) {
+      return NextResponse.json(
+        { error: "Supervisor is not an active workspace member" },
+        { status: 400 },
+      );
+    }
+  }
+
+  const checklistItems = normalizeChecklistCreate(parsed.data.checklist);
 
   let labelIds: string[] = [];
   if (parsed.data.labelIds?.length) {
@@ -270,6 +310,7 @@ export async function POST(req: Request, context: Ctx) {
       description: parsed.data.description,
       order: (maxOrder._max.order ?? -1) + 1,
       createdById: session.user.id,
+      supervisorId,
       priority: parsed.data.priority || "NONE",
       estimatedHours: parsed.data.estimatedHours ?? null,
       workflowStatus: "ASSIGNED",
@@ -283,11 +324,9 @@ export async function POST(req: Request, context: Ctx) {
         ? { create: labelIds.map((labelId) => ({ labelId })) }
         : undefined,
       checklistItems: {
-        create: (parsed.data.checklist?.length
-          ? parsed.data.checklist
-          : [...DEFAULT_CHECKLIST]
-        ).map((title, i) => ({
-          title,
+        create: checklistItems.map((item, i) => ({
+          title: item.title,
+          description: item.description,
           order: i,
         })),
       },
@@ -316,12 +355,47 @@ export async function POST(req: Request, context: Ctx) {
       title: `Assigned to “${card.title}”`,
       body: "You were assigned to a new task",
     });
+    try {
+      const { emailUsersTaskAssigned } = await import("@/lib/notify-email");
+      await emailUsersTaskAssigned({
+        userIds: [...assigneeIds],
+        actorId: session.user.id,
+        boardId,
+        cardId: card.id,
+        cardTitle: card.title,
+        workspaceId: board.workspaceId,
+      });
+    } catch (e) {
+      console.error("[card.create] task email failed", e);
+    }
+  }
+  if (supervisorId) {
+    await notifyUsers({
+      userIds: [supervisorId],
+      workspaceId: board.workspaceId,
+      boardId,
+      cardId: card.id,
+      actorId: session.user.id,
+      type: "task.supervisor",
+      title: `Supervisor on “${card.title}”`,
+      body: "You were set as supervisor for this task",
+    });
   }
 
   emitToBoardRoom(boardId, "card-updated", {
     type: "card.created",
     boardId,
     cards: [{ id: card.id, listId: card.listId, order: card.order }],
+  });
+
+  const { publishBoardLive } = await import("@/lib/boards-live-bus");
+  publishBoardLive({
+    type: "card.changed",
+    workspaceId: board.workspaceId,
+    boardId,
+    cardId: card.id,
+    departmentId: board.departmentId,
+    reason: "created",
   });
 
   return NextResponse.json({ data: card }, { status: 201 });

@@ -128,28 +128,33 @@ export function formatAppDate(
     return lang === 'fa' ? toFaDigits(out) : out;
   }
 
+  const locale = lang === 'fa' ? 'fa-IR-u-ca-gregory' : 'en-US';
   if (style === 'short') {
-    return d.toLocaleDateString(lang === 'fa' ? 'en-GB' : 'en-US');
+    const out = d.toLocaleDateString(locale, { day: 'numeric', month: 'short' });
+    return lang === 'fa' ? toFaDigits(out) : out;
   }
   if (style === 'monthYear') {
-    return d.toLocaleDateString(undefined, {
+    const out = d.toLocaleDateString(locale, {
       month: 'long',
       year: 'numeric',
     });
+    return lang === 'fa' ? toFaDigits(out) : out;
   }
   if (style === 'long') {
-    return d.toLocaleDateString(undefined, {
+    const out = d.toLocaleDateString(locale, {
       weekday: 'short',
       day: 'numeric',
       month: 'short',
       year: 'numeric',
     });
+    return lang === 'fa' ? toFaDigits(out) : out;
   }
-  return d.toLocaleDateString(undefined, {
+  const out = d.toLocaleDateString(locale, {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
   });
+  return lang === 'fa' ? toFaDigits(out) : out;
 }
 
 export function formatDueLabel(

@@ -1,35 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
-import {
-  MdAdd,
-  MdAttachFile,
-  MdChatBubbleOutline,
-  MdGroups,
-  MdOpenInNew,
-} from 'react-icons/md';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
+import { MdAdd, MdDelete, MdEdit, MdGroups } from 'react-icons/md';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
 import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { CardDetailsModal } from '@/components/board/CardDetailsModal';
 import { CreateTaskModal } from '@/components/board/CreateTaskModal';
+import { CreateProjectModal } from '@/components/board/CreateProjectModal';
+import { RichTaskCard } from '@/components/board/RichTaskCard';
+import BoardSettingsDialog from '@/components/board/BoardSettingsDialog';
+import { ProjectMark } from '@/components/board/ProjectMark';
 import { DepartmentIcon } from '@/components/departments/DepartmentIcon';
-import {
-  PersonAvatar,
-  PersonQuickActions,
-} from '@/components/departments/PersonQuickActions';
-import type { DeptRichCard, DeptData } from '@/components/departments/department-types';
-import { WorkTimerBadge } from '@/components/ui/WorkTimerBadge';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { isChecklistBookend } from '@/lib/checklist-defaults';
+import type { DeptData } from '@/components/departments/department-types';
+import { isGeneralBoardName } from '@/lib/board-lists';
+import { useBoardsLive } from '@/hooks/useBoardsLive';
 import { textPrimary,
   textSecondary,
   textMuted,
@@ -45,236 +31,6 @@ function progressColor(pct: number) {
   if (pct >= 70) return '#3b82f6';
   if (pct >= 40) return '#f59e0b';
   return '#ef4444';
-}
-
-function stripHtml(html: string | null | undefined) {
-  if (!html) return '';
-  return html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function TaskCard({
-  card,
-  cardBg,
-  isDark,
-  workspaceId,
-  departmentId,
-  onOpen,
-}: {
-  card: DeptRichCard;
-  coverColor?: string;
-  cardBg: string;
-  isDark: boolean;
-  workspaceId: string;
-  departmentId: string;
-  onOpen: () => void;
-}) {
-  const { t } = useLang();
-  const checklistItems = (card.checklist.items || []).filter(
-    (i) => !isChecklistBookend(i.title),
-  );
-  const checklistDone = checklistItems.filter((i) => i.isDone).length;
-  const description = stripHtml(card.description);
-  const creator = card.createdBy;
-  const doers = card.assignees;
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      className="w-full text-start rounded-xl p-3 space-y-2.5 transition-colors duration-200 cursor-pointer"
-      style={{
-        background: cardBg,
-        border: `1px solid ${borderSubtle(isDark)}`,
-      }}
-    >
-      {/* Title */}
-      <div className="min-w-0">
-        <p
-          className="text-sm font-semibold leading-snug"
-          style={{ color: textPrimary(isDark) }}
-        >
-          {card.title}
-        </p>
-        {card.labels.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1.5">
-            {card.labels.slice(0, 4).map((l) => (
-              <span
-                key={l.id}
-                className="text-[9px] font-bold px-1.5 py-0.5 rounded-md text-white"
-                style={{ background: l.color }}
-              >
-                {l.name}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Description */}
-      {description && (
-        <p
-          className="text-[11px] leading-relaxed line-clamp-3"
-          style={{ color: textSecondary(isDark) }}
-        >
-          {description}
-        </p>
-      )}
-
-      {/* Checklist items — hide Start / End bookends */}
-      {checklistItems.length > 0 && (
-        <ul className="space-y-1">
-          {checklistItems.slice(0, 6).map((item) => (
-            <li
-              key={item.id}
-              className="flex items-start gap-1.5 text-[11px] leading-snug"
-              style={{
-                color: item.isDone ? textMuted(isDark) : textSecondary(isDark),
-                textDecoration: item.isDone ? 'line-through' : 'none',
-                opacity: item.isDone ? 0.75 : 1,
-              }}
-            >
-              <span
-                className="mt-0.5 h-3 w-3 rounded-full border flex-shrink-0"
-                style={{
-                  borderColor: item.isDone ? '#22c55e' : borderSubtle(isDark),
-                  background: item.isDone ? '#22c55e' : 'transparent',
-                }}
-              />
-              <span className="line-clamp-2">{item.title}</span>
-            </li>
-          ))}
-          {checklistItems.length > 6 && (
-            <li className="text-[10px] pl-4" style={{ color: textMuted(isDark) }}>
-              +{checklistItems.length - 6} more · {checklistDone}/{checklistItems.length}
-            </li>
-          )}
-        </ul>
-      )}
-
-      {/* Creator / Doer with photos */}
-      <div
-        className="space-y-1.5 pt-1 border-t"
-        style={{ borderColor: borderSubtle(isDark) }}
-      >
-        {creator && (
-          <PersonQuickActions
-            person={creator}
-            workspaceId={workspaceId}
-            departmentId={departmentId}
-            isDark={isDark}
-            className="w-full"
-          >
-            <span
-              className="flex items-center gap-1.5 text-[10px] min-w-0"
-              style={{ color: textMuted(isDark) }}
-            >
-              <PersonAvatar person={creator} size={18} isDark={isDark} />
-              <span className="opacity-70 shrink-0">{t('common.create')}</span>
-              <span
-                className="font-medium truncate"
-                style={{ color: textSecondary(isDark) }}
-              >
-                {creator.name || creator.email}
-              </span>
-            </span>
-          </PersonQuickActions>
-        )}
-        <div className="flex items-center gap-1.5 text-[10px] min-w-0 flex-wrap">
-          <span className="opacity-70 shrink-0" style={{ color: textMuted(isDark) }}>
-            {t('myTasksPage.onProcess')}
-          </span>
-          {doers.length > 0 ? (
-            doers.map((a) => (
-              <PersonQuickActions
-                key={a.id}
-                person={a}
-                workspaceId={workspaceId}
-                departmentId={departmentId}
-                isDark={isDark}
-              >
-                <span
-                  className="inline-flex items-center gap-1 rounded-full pl-0.5 pr-1.5 py-0.5"
-                  style={{
-                    background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                    color: textSecondary(isDark),
-                  }}
-                >
-                  <PersonAvatar person={a} size={16} isDark={isDark} />
-                  <span className="font-medium max-w-[7rem] truncate">
-                    {a.name || a.email}
-                  </span>
-                </span>
-              </PersonQuickActions>
-            ))
-          ) : (
-            <span className="font-medium" style={{ color: textMuted(isDark) }}>
-              {t('projectsPage.unassigned')}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Meta row */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-[10px]" style={{ color: textMuted(isDark) }}>
-          {card.listTitle && (
-            <span
-              className="px-1.5 py-0.5 rounded-md font-medium"
-              style={{
-                background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-              }}
-            >
-              {card.listTitle}
-            </span>
-          )}
-          {(card.commentCount || 0) > 0 && (
-            <span className="inline-flex items-center gap-0.5">
-              <MdChatBubbleOutline size={11} />
-              {card.commentCount}
-            </span>
-          )}
-          {(card.attachmentCount || 0) > 0 && (
-            <span className="inline-flex items-center gap-0.5">
-              <MdAttachFile size={11} />
-              {card.attachmentCount}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <WorkTimerBadge
-            startedAt={card.startedAt}
-            workflowStatus={card.workflowStatus}
-            size="sm"
-          />
-          {card.dueDate && (
-            <span
-              className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
-              style={{
-                background: isDark ? 'rgba(180,83,9,0.35)' : 'rgba(180,83,9,0.15)',
-                color: '#f59e0b',
-              }}
-            >
-              {new Date(card.dueDate).toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-              })}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export default function DepartmentKanban({
@@ -293,80 +49,93 @@ export default function DepartmentKanban({
   const { theme } = useTheme();
   const { t } = useLang();
   const isDark = theme === 'dark';
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const boardFrom = useMemo(() => {
-    const q = new URLSearchParams(searchParams.toString());
-    if (!q.get('tab')) q.set('tab', 'kanban');
-    const s = q.toString();
-    return s ? `${pathname}?${s}` : `${pathname}?tab=kanban`;
-  }, [pathname, searchParams]);
-  const boardHref = (projectId: string) =>
-    `/board/${projectId}?from=${encodeURIComponent(boardFrom)}`;
   const [localData, setLocalData] = useState<DeptData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!dataProp);
   const [detail, setDetail] = useState<{ boardId: string; cardId: string } | null>(null);
   const [createForBoardId, setCreateForBoardId] = useState<string | null>(null);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
-  const [projectName, setProjectName] = useState('');
-  const [projectDesc, setProjectDesc] = useState('');
-  const [projectBusy, setProjectBusy] = useState(false);
-  const [projectError, setProjectError] = useState<string | null>(null);
+  const [settingsProject, setSettingsProject] = useState<DeptData['projects'][number] | null>(null);
+  const ignoreClickUntil = useRef(0);
+  const liveReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const data = dataProp ?? localData;
   const canCreateBoard = !!data?.canCreateBoard;
   const canCreateTask = !!data?.canCreateTask;
+  const [projects, setProjects] = useState(data?.projects ?? []);
+  const [checklistBusyId, setChecklistBusyId] = useState<string | null>(null);
 
-  const departmentBoards = useMemo(
-    () => data?.projects.map((p) => ({ id: p.id, name: p.name })) ?? [],
-    [data?.projects],
-  );
-
-  async function createProject() {
-    if (!projectName.trim() || !canCreateBoard) return;
-    setProjectBusy(true);
-    setProjectError(null);
+  async function toggleChecklistOnCard(
+    boardId: string,
+    cardId: string,
+    itemId: string,
+    nextDone: boolean,
+  ) {
+    setChecklistBusyId(itemId);
+    // Optimistic update
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== boardId) return p;
+        return {
+          ...p,
+          cards: p.cards.map((c) => {
+            if (c.id !== cardId) return c;
+            const items = c.checklist.items.map((it) =>
+              it.id === itemId ? { ...it, isDone: nextDone } : it,
+            );
+            const done = items.filter((it) => it.isDone).length;
+            return {
+              ...c,
+              checklist: {
+                ...c.checklist,
+                items,
+                done,
+                total: items.length,
+                progressPct: items.length
+                  ? Math.round((done / items.length) * 100)
+                  : 0,
+              },
+            };
+          }),
+        };
+      }),
+    );
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/boards`, {
-        method: 'POST',
+      const res = await fetch(`/api/boards/${boardId}/cards/${cardId}/checklist`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: projectName.trim(),
-          description: projectDesc.trim() || undefined,
-          visibility: 'WORKSPACE',
-          departmentId: deptId,
-        }),
+        body: JSON.stringify({ itemId, isDone: nextDone }),
       });
-      const text = await res.text();
-      let json: { error?: string; data?: { id: string } } = {};
-      try {
-        json = text ? JSON.parse(text) : {};
-      } catch {
-        throw new Error(
-          res.ok
-            ? 'Invalid server response'
-            : `Create failed (${res.status})`,
-        );
+      if (!res.ok) {
+        await load({ silent: true });
       }
-      if (!res.ok) throw new Error(json.error || 'Failed to create project');
-      setCreateProjectOpen(false);
-      setProjectName('');
-      setProjectDesc('');
-      await load();
-    } catch (e) {
-      setProjectError(e instanceof Error ? e.message : 'Failed');
+    } catch {
+      await load({ silent: true });
     } finally {
-      setProjectBusy(false);
+      setChecklistBusyId(null);
     }
   }
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    setProjects(data?.projects ?? []);
+  }, [data?.projects]);
+
+  const departmentBoards = useMemo(
+    () =>
+      projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        isGeneral: p.isGeneral,
+      })) ?? [],
+    [projects],
+  );
+
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (onReload) {
       await onReload();
       return;
     }
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     try {
       const res = await fetch(
         `/api/workspaces/${workspaceId}/departments/${deptId}`,
@@ -376,18 +145,145 @@ export default function DepartmentKanban({
       try {
         json = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(`Failed to load (${res.status})`);
+        throw new Error(t('common.loadFailed'));
       }
-      if (!res.ok) throw new Error(json.error || 'Failed to load');
+      if (!res.ok) throw new Error(json.error || t('common.loadFailed'));
       setLocalData(json.data ?? null);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : t('common.loadFailed'));
       setLocalData(null);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  }, [workspaceId, deptId, onReload]);
+  }, [workspaceId, deptId, onReload, t]);
+
+  const projectLabel = useCallback(
+    (project: { name: string; isGeneral?: boolean }) => {
+      if (project.isGeneral || isGeneralBoardName(project.name)) {
+        return t('departments.general');
+      }
+      return project.name;
+    },
+    [t],
+  );
+
+  async function handleDragEnd(result: DropResult) {
+    const { destination, source } = result;
+    if (!destination) return;
+    if (
+      destination.droppableId === source.droppableId &&
+      destination.index === source.index
+    ) {
+      return;
+    }
+
+    const fromId = source.droppableId;
+    const toId = destination.droppableId;
+    const sourceProject = projects.find((p) => p.id === fromId);
+    const card = sourceProject?.cards[source.index];
+    if (!card) return;
+
+    setProjects((prev) => {
+      const next = prev.map((p) => ({ ...p, cards: [...p.cards] }));
+      const from = next.find((p) => p.id === fromId);
+      const to = next.find((p) => p.id === toId);
+      if (!from || !to) return prev;
+      const [moved] = from.cards.splice(source.index, 1);
+      if (!moved) return prev;
+      if (fromId === toId) {
+        from.cards.splice(destination.index, 0, moved);
+        from.cardCount = from.cards.length;
+        return next;
+      }
+      to.cards.splice(destination.index, 0, moved);
+      from.cardCount = from.cards.length;
+      to.cardCount = to.cards.length;
+      return next;
+    });
+
+    if (fromId === toId) return;
+
+    try {
+      const res = await fetch(`/api/boards/${fromId}/cards/${card.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toBoardId: toId }),
+      });
+      if (!res.ok) {
+        await load({ silent: true });
+        return;
+      }
+    } catch {
+      await load({ silent: true });
+    }
+  }
+
+  function dropProject(projectId: string) {
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    setSettingsProject((cur) => (cur?.id === projectId ? null : cur));
+    setDetail((cur) => (cur?.boardId === projectId ? null : cur));
+    setCreateForBoardId((cur) => (cur === projectId ? null : cur));
+  }
+
+  function dropCard(boardId: string, cardId: string) {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== boardId) return p;
+        const cards = p.cards.filter((c) => c.id !== cardId);
+        return { ...p, cards, cardCount: cards.length };
+      }),
+    );
+    setDetail((cur) => (cur?.cardId === cardId ? null : cur));
+  }
+
+  useBoardsLive(workspaceId, (ev) => {
+    if (ev.type === 'board.archived') {
+      dropProject(ev.boardId);
+      return;
+    }
+    if (ev.type === 'card.deleted') {
+      dropCard(ev.boardId, ev.cardId);
+      return;
+    }
+    if (
+      ev.type === 'board.changed' ||
+      ev.type === 'card.changed' ||
+      ev.type === 'department.changed' ||
+      ev.type === 'workspace.invalidate'
+    ) {
+      const evDept =
+        'departmentId' in ev ? (ev.departmentId as string | null | undefined) : undefined;
+      if (
+        evDept &&
+        deptId !== 'general' &&
+        evDept !== deptId &&
+        ev.type !== 'workspace.invalidate'
+      ) {
+        return;
+      }
+      if (liveReloadTimer.current) clearTimeout(liveReloadTimer.current);
+      liveReloadTimer.current = setTimeout(() => {
+        void load({ silent: true });
+      }, 120);
+    }
+  });
+
+  async function deleteProject(projectId: string) {
+    if (!window.confirm(t('projectsPage.deleteProjectConfirm'))) return;
+    const snapshot = projects;
+    dropProject(projectId);
+    const res = await fetch(`/api/boards/${projectId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setProjects(snapshot);
+      const json = await res.json().catch(() => ({}));
+      setError(
+        json.error === 'Cannot delete the default General project'
+          ? t('projectsPage.cannotDeleteGeneral')
+          : json.error || t('projectsPage.failed'),
+      );
+    }
+  }
 
   useEffect(() => {
     if (!dataProp) void load();
@@ -427,9 +323,6 @@ export default function DepartmentKanban({
               </span>
               {data.name}
             </h1>
-            <p className="text-sm mt-1" style={{ color: textSecondary(isDark) }}>
-              {t('projectsPage.kanbanHint')}
-            </p>
           </div>
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
@@ -454,11 +347,39 @@ export default function DepartmentKanban({
           border: `1px solid ${borderSubtle(isDark)}`,
         }}
       >
+        <p className="text-[11px] px-1 pb-2" style={{ color: textMuted(isDark) }}>
+          {t('projectsPage.dragTaskHint')}
+        </p>
+        <DragDropContext
+          onDragStart={() => {
+            ignoreClickUntil.current = Date.now() + 800;
+          }}
+          onDragEnd={(r) => {
+            ignoreClickUntil.current = Date.now() + 300;
+            void handleDragEnd(r);
+          }}
+        >
         <div className="flex gap-3 items-start overflow-x-auto pt-1 pb-2">
-          {data.projects.map((project) => (
-            <section
+          <AnimatePresence initial={false}>
+          {projects.map((project) => (
+            <motion.section
               key={project.id}
-              className="shrink-0 w-[min(300px,calc(100vw-3rem))] sm:w-[320px] rounded-2xl overflow-hidden"
+              layout
+              initial={{ opacity: 0, x: 28, scale: 0.98 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{
+                opacity: 0,
+                x: -36,
+                scale: 0.92,
+                filter: 'blur(8px)',
+              }}
+              transition={{
+                layout: { type: 'spring', stiffness: 340, damping: 32 },
+                opacity: { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
+                x: { duration: 0.34, ease: [0.16, 1, 0.3, 1] },
+                scale: { duration: 0.34, ease: [0.16, 1, 0.3, 1] },
+              }}
+              className="group/project shrink-0 w-[min(300px,calc(100vw-3rem))] sm:w-[320px] rounded-2xl overflow-hidden origin-top"
               style={{
                 background: colBg,
                 border: `1px solid ${borderSubtle(isDark)}`,
@@ -473,29 +394,59 @@ export default function DepartmentKanban({
               />
               <header className="px-3 pt-3 pb-2.5">
                 <div className="flex items-start justify-between gap-2">
-                  <Link
-                    href={boardHref(project.id)}
-                    className="font-semibold text-sm hover:underline min-w-0 leading-snug"
+                  <div
+                    className="font-semibold text-sm min-w-0 leading-snug inline-flex items-center gap-2"
                     style={{ color: textPrimary(isDark) }}
                   >
-                    {project.name}{' '}
-                    <span style={{ color: textMuted(isDark) }}>
-                      ({project.cardCount})
+                    <ProjectMark
+                      name={projectLabel(project)}
+                      color={project.coverColor}
+                      icon={project.icon}
+                      size={28}
+                      isDark={isDark}
+                    />
+                    <span className="min-w-0">
+                      {projectLabel(project)}{' '}
+                      <span style={{ color: textMuted(isDark) }}>
+                        ({project.cardCount})
+                      </span>
                     </span>
-                  </Link>
-                  <Link
-                    href={boardHref(project.id)}
-                    className="shrink-0 p-1.5 rounded-lg"
-                    style={{
-                      color: textMuted(isDark),
-                      background: isDark
-                        ? 'rgba(255,255,255,0.05)'
-                        : 'rgba(0,0,0,0.04)',
-                    }}
-                    title={t('common.open')}
-                  >
-                    <MdOpenInNew size={15} />
-                  </Link>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsProject(project)}
+                      className="opacity-0 group-hover/project:opacity-100 focus:opacity-100 p-1.5 rounded-lg inline-flex items-center gap-1 transition-opacity"
+                      style={{
+                        color: textSecondary(isDark),
+                        background: isDark
+                          ? 'rgba(255,255,255,0.08)'
+                          : 'rgba(0,0,0,0.05)',
+                      }}
+                      title={t('projectsPage.editProject')}
+                      aria-label={t('projectsPage.editProject')}
+                    >
+                      <MdEdit size={15} />
+                      <span className="text-[10px] font-semibold">{t('common.edit')}</span>
+                    </button>
+                    {project.canDelete && (
+                      <button
+                        type="button"
+                        onClick={() => void deleteProject(project.id)}
+                        className="opacity-0 group-hover/project:opacity-100 focus:opacity-100 p-1.5 rounded-lg inline-flex items-center gap-1 transition-opacity"
+                        style={{
+                          color: '#ef4444',
+                          background: isDark
+                            ? 'rgba(239,68,68,0.12)'
+                            : 'rgba(239,68,68,0.08)',
+                        }}
+                        title={t('projectsPage.deleteProject')}
+                        aria-label={t('projectsPage.deleteProject')}
+                      >
+                        <MdDelete size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div
                   className="mt-2.5 h-1.5 rounded-full overflow-hidden"
@@ -530,40 +481,73 @@ export default function DepartmentKanban({
                 )}
               </header>
 
-              <ul className="px-2.5 pb-3 space-y-2">
-                {project.cards.map((card) => (
-                  <li key={card.id}>
-                    <TaskCard
-                      card={card}
-                      coverColor={project.coverColor}
-                      cardBg={isDark ? surfaceItem(isDark) : '#F9FAFB'}
-                      isDark={isDark}
-                      workspaceId={workspaceId}
-                      departmentId={deptId}
-                      onOpen={() =>
-                        setDetail({ boardId: project.id, cardId: card.id })
-                      }
-                    />
-                  </li>
-                ))}
-                {project.cards.length === 0 && (
-                  <li
-                    className="text-xs text-center py-8"
-                    style={{ color: textMuted(isDark) }}
+              <Droppable droppableId={project.id}>
+                {(provided, snapshot) => (
+                  <ul
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className="px-2.5 pb-3 space-y-2 min-h-[96px] rounded-xl mx-1 mb-1"
+                    style={{
+                      background: snapshot.isDraggingOver
+                        ? hexToRgba(project.coverColor, isDark ? 0.22 : 0.14)
+                        : 'transparent',
+                    }}
                   >
-                    {t('common.noResults')}
-                  </li>
+                    {project.cards.map((card, index) => (
+                      <Draggable key={card.id} draggableId={card.id} index={index}>
+                        {(drag, snap) => (
+                          <li
+                            ref={drag.innerRef}
+                            {...drag.draggableProps}
+                            {...drag.dragHandleProps}
+                            style={drag.draggableProps.style}
+                          >
+                            <RichTaskCard
+                              card={{
+                                ...card,
+                                checklistItems: card.checklist.items,
+                              }}
+                              cardBg={isDark ? surfaceItem(isDark) : '#F9FAFB'}
+                              isDark={isDark}
+                              workspaceId={workspaceId}
+                              departmentId={deptId === 'general' ? undefined : deptId}
+                              onOpen={() => {
+                                if (snap.isDragging || Date.now() < ignoreClickUntil.current) return;
+                                setDetail({ boardId: project.id, cardId: card.id });
+                              }}
+                              checklistBusyId={checklistBusyId}
+                              onToggleChecklist={(itemId, nextDone) =>
+                                void toggleChecklistOnCard(
+                                  project.id,
+                                  card.id,
+                                  itemId,
+                                  nextDone,
+                                )
+                              }
+                            />
+                          </li>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                    {project.cards.length === 0 && !snapshot.isDraggingOver && (
+                      <li
+                        className="text-xs text-center py-8"
+                        style={{ color: textMuted(isDark) }}
+                      >
+                        {t('common.noResults')}
+                      </li>
+                    )}
+                  </ul>
                 )}
-              </ul>
-            </section>
+              </Droppable>
+            </motion.section>
           ))}
+          </AnimatePresence>
           {canCreateBoard && (
             <button
               type="button"
-              onClick={() => {
-                setProjectError(null);
-                setCreateProjectOpen(true);
-              }}
+              onClick={() => setCreateProjectOpen(true)}
               className="shrink-0 w-[280px] sm:w-[300px] min-h-[180px] rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-colors"
               style={{
                 borderColor: isDark ? 'rgba(59,130,246,0.55)' : 'rgba(37,99,235,0.4)',
@@ -583,18 +567,16 @@ export default function DepartmentKanban({
               <span className="text-sm font-semibold" style={{ color: isDark ? '#93C5FD' : '#2563EB' }}>
                 {t('projectsPage.createProject')}
               </span>
-              <span className="text-[11px] px-4 text-center">
-                {t('projectsPage.kanbanHint')}
-              </span>
             </button>
           )}
 
-          {data.projects.length === 0 && !canCreateBoard && (
+          {projects.length === 0 && !canCreateBoard && (
             <p className="text-sm py-8" style={{ color: textMuted(isDark) }}>
               {t('projectsPage.noProjectsInDept')}
             </p>
           )}
         </div>
+        </DragDropContext>
       </div>
 
       {detail && (
@@ -602,12 +584,12 @@ export default function DepartmentKanban({
           boardId={detail.boardId}
           cardId={detail.cardId}
           open
-          onClose={() => {
+          onClose={() => setDetail(null)}
+          onChanged={() => void load({ silent: true })}
+          onDeleted={() => {
+            const { boardId, cardId } = detail;
             setDetail(null);
-            void load();
-          }}
-          onChanged={() => {
-            void load();
+            dropCard(boardId, cardId);
           }}
         />
       )}
@@ -621,91 +603,60 @@ export default function DepartmentKanban({
           lockBoard
           boardOptions={departmentBoards}
           onClose={() => setCreateForBoardId(null)}
-          onCreated={() => void load()}
+          onCreated={() => void load({ silent: true })}
         />
       )}
 
-      <Dialog
+      <CreateProjectModal
+        workspaceId={workspaceId}
+        isDark={isDark}
         open={createProjectOpen}
-        onOpenChange={(v) => {
-          if (!v) {
-            setCreateProjectOpen(false);
-            setProjectError(null);
+        onClose={() => setCreateProjectOpen(false)}
+        lockDepartment
+        defaultDepartmentId={deptId === 'general' ? null : deptId}
+        departments={[
+          {
+            id: deptId === 'general' ? null : deptId,
+            key: data.key,
+            label: data.name,
+          },
+        ]}
+        onCreated={() => void load({ silent: true })}
+      />
+
+      {settingsProject && (
+        <BoardSettingsDialog
+          open
+          boardId={settingsProject.id}
+          workspaceId={workspaceId}
+          initial={{
+            name: settingsProject.name,
+            description: settingsProject.description ?? null,
+            visibility: settingsProject.visibility || 'WORKSPACE',
+            background: settingsProject.coverColor,
+            color: settingsProject.color ?? null,
+            icon: settingsProject.icon ?? null,
+            departmentId: deptId === 'general' ? null : deptId,
+          }}
+          departments={
+            deptId === 'general'
+              ? []
+              : [{ id: deptId, key: data.key, label: data.name }]
           }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t('projectsPage.createProject')}</DialogTitle>
-            <DialogDescription>
-              {t('projectsPage.kanbanHint')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <label className="block space-y-1">
-              <span className="text-xs font-medium" style={{ color: textMuted(isDark) }}>
-                {t('boardTask.project')}
-              </span>
-              <input
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder={t('projectsPage.newBoardPlaceholder')}
-                className="w-full px-3 py-2.5 rounded-xl text-sm outline-none"
-                style={{
-                  border: `1px solid ${borderSubtle(isDark)}`,
-                  background: surfaceItem(isDark),
-                  color: textPrimary(isDark),
-                }}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && projectName.trim()) void createProject();
-                }}
-              />
-            </label>
-            <label className="block space-y-1">
-              <span className="text-xs font-medium" style={{ color: textMuted(isDark) }}>
-                {t('boardTask.description')}
-              </span>
-              <textarea
-                value={projectDesc}
-                onChange={(e) => setProjectDesc(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2.5 rounded-xl text-sm outline-none resize-none"
-                style={{
-                  border: `1px solid ${borderSubtle(isDark)}`,
-                  background: surfaceItem(isDark),
-                  color: textPrimary(isDark),
-                }}
-              />
-            </label>
-            {projectError && (
-              <p className="text-sm text-red-500">{projectError}</p>
-            )}
-          </div>
-          <DialogFooter>
-            <button
-              type="button"
-              onClick={() => setCreateProjectOpen(false)}
-              className="px-3 py-2 rounded-xl text-xs font-semibold"
-              style={{
-                border: `1px solid ${borderSubtle(isDark)}`,
-                color: textSecondary(isDark),
-              }}
-            >
-              {t('kanban.cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={projectBusy || projectName.trim().length < 1}
-              onClick={() => void createProject()}
-              className="px-3 py-2 rounded-xl text-xs font-semibold text-white disabled:opacity-50"
-              style={{ background: data.color || '#2563eb' }}
-            >
-              {projectBusy ? t('kanban.creating') : t('projectsPage.createProject')}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          onClose={() => setSettingsProject(null)}
+          onSaved={() => {
+            setSettingsProject(null);
+            void load({ silent: true });
+          }}
+          isGeneral={Boolean(settingsProject.isGeneral)}
+          canDelete={Boolean(settingsProject.canDelete)}
+          onDeleted={() => {
+            const id = settingsProject.id;
+            setSettingsProject(null);
+            dropProject(id);
+          }}
+        />
+      )}
     </div>
   );
 }

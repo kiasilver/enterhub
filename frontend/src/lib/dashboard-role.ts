@@ -87,5 +87,6 @@ export async function resolveHomeDashboard(input: {
     return { kind: "guest", homePath: "/guest" };
   }
 
-  return { kind: "demo", homePath: "/onboarding/company" };
+  // Individual account with no workspace yet — wait for invites or create a company.
+  return { kind: "demo", homePath: "/home" };
 }

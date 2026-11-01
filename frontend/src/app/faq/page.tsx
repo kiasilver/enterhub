@@ -46,7 +46,7 @@ const FAQ_FA = [
 
 export default function FAQPage() {
   const { theme } = useTheme();
-  const { lang } = useLang();
+  const { lang, t } = useLang();
   const isDark = theme === 'dark';
   const faqs = lang === 'fa' ? FAQ_FA : FAQ_EN;
 
@@ -99,6 +99,19 @@ export default function FAQPage() {
                 </p>
               </div>
             ))}
+          </div>
+
+          <div className="mt-8 text-center">
+            <a
+              href="/guide"
+              className="inline-flex items-center justify-center min-h-[44px] px-6 rounded-xl text-sm font-semibold"
+              style={{
+                backgroundColor: isDark ? '#fff' : '#0a0a0a',
+                color: isDark ? '#0a0a0a' : '#fff',
+              }}
+            >
+              {t('learn.openGuide')}
+            </a>
           </div>
         </div>
       </div>

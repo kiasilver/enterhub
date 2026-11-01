@@ -23,6 +23,10 @@ export type SafeAppShellProps = {
   routes: Record<string, string>;
   brandTitle?: string;
   brandSubtitle?: string;
+  brandLogoUrl?: string | null;
+  brandLogoUrlDark?: string | null;
+  brandShowName?: boolean;
+  brandLogoColor?: string | null;
   /** Extra strip under topbar (e.g. impersonation banner) */
   banner?: React.ReactNode;
   /** Slot under sidebar brand (workspace switcher) */
@@ -39,6 +43,7 @@ export type SafeAppShellProps = {
   profileMenuItems?: { id: string; label: string }[];
   profileDisplayName?: string;
   profileSubtitle?: string;
+  profileAvatarUrl?: string | null;
   children: React.ReactNode;
 };
 
@@ -48,6 +53,10 @@ export default function SafeAppShell({
   routes,
   brandTitle,
   brandSubtitle,
+  brandLogoUrl,
+  brandLogoUrlDark,
+  brandShowName = true,
+  brandLogoColor,
   banner,
   sidebarHeader,
   topbar,
@@ -55,6 +64,7 @@ export default function SafeAppShell({
   profileMenuItems,
   profileDisplayName,
   profileSubtitle,
+  profileAvatarUrl,
   children,
 }: SafeAppShellProps) {
   const { theme, bgStyle, primaryColor } = useTheme();
@@ -252,10 +262,15 @@ export default function SafeAppShell({
                   nav={nav}
                   brandTitle={brandTitle}
                   brandSubtitle={brandSubtitle}
+                  brandLogoUrl={brandLogoUrl}
+                  brandLogoUrlDark={brandLogoUrlDark}
+                  brandShowName={brandShowName}
+                  brandLogoColor={brandLogoColor}
                   headerSlot={sidebarHeader}
                   profileMenuItems={profileMenuItems}
                   profileDisplayName={profileDisplayName}
                   profileSubtitle={profileSubtitle}
+                  profileAvatarUrl={profileAvatarUrl}
                 />
               </div>
             </>
@@ -295,7 +310,7 @@ export default function SafeAppShell({
               </div>
             ) : (
               <div
-                className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden thin-scrollbar px-3 xs:px-4 sm:px-6 3xl:px-8 4xl:px-10 py-4 sm:py-5 w-full"
+                className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto thin-scrollbar px-3 xs:px-4 sm:px-6 3xl:px-8 4xl:px-10 py-4 sm:py-5 w-full"
               >
                 {children}
               </div>

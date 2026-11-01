@@ -10,6 +10,11 @@ import { useLang } from '@/components/LanguageProvider/LanguageProvider';
 import { localizedDepartmentLabel } from '@/lib/department-i18n';
 import { localizeRoleName } from '@/lib/role-i18n';
 import { PresenceProvider } from '@/hooks/usePresence';
+import { MeetingCallProvider } from '@/components/meeting/MeetingCallProvider';
+import {
+  WorkspaceBrandingProvider,
+  useWorkspaceBranding,
+} from '@/components/workspace/WorkspaceBranding';
 
 const Icon = ({
   d,
@@ -120,12 +125,12 @@ function buildWorkspaceNav(
     for (const folder of folders) {
       for (const b of folder.boards) {
         const bid = `ws-board-${b.id}`;
-        routes[bid] = `/board/${b.id}`;
+        routes[bid] = `${base}/boards?view=list&mode=kanban`;
       }
     }
     for (const b of uncategorized) {
       const bid = `ws-board-${b.id}`;
-      routes[bid] = `/board/${b.id}`;
+      routes[bid] = `${base}/boards?view=list&mode=kanban`;
     }
 
     nav.push({
@@ -268,6 +273,7 @@ function buildWorkspaceNav(
   routes['ws-media'] = `${base}/settings/media`;
   routes['account-profile'] = `${base}/account?tab=profile`;
   routes['account-settings'] = `${base}/account?tab=settings`;
+  routes['account-notifications'] = `${base}/account?tab=notifications`;
   routes['account-help'] = `${base}/account?tab=help`;
   // Billing lives in workspace settings (not personal account)
   routes['account-billing'] = `${base}/settings/billing`;
@@ -293,10 +299,12 @@ function buildWorkspaceNav(
 function resolveActiveId(pathname: string, workspaceId: string, search = ''): string {
   const base = `/workspace/${workspaceId}`;
   if (pathname.includes('/chat')) return 'ws-chat';
+  if (pathname.includes('/meetings')) return 'ws-chat';
   if (pathname.includes('/email')) return 'ws-email';
   if (pathname.includes('/calendar')) return 'ws-calendar';
   if (pathname.includes('/account')) {
     if (search.includes('tab=settings')) return 'account-settings';
+    if (search.includes('tab=notifications')) return 'account-notifications';
     if (search.includes('tab=help')) return 'account-help';
     return 'account-profile';
   }
@@ -344,7 +352,39 @@ function resolveActiveId(pathname: string, workspaceId: string, search = ''): st
   return 'ws-analytics-home';
 }
 
-export function WorkspaceShell({
+export function WorkspaceShell(props: {
+  workspaceId: string;
+  workspaceName: string;
+  permissions: string[];
+  isSuperAdmin?: boolean;
+  impersonating?: boolean;
+  children: React.ReactNode;
+  initialBranding?: {
+    logoUrl?: string | null;
+    logoUrlDark?: string | null;
+    logoColor?: string | null;
+    showCompanyName?: boolean;
+  } | null;
+}) {
+  return (
+    <WorkspaceBrandingProvider
+      workspaceId={props.workspaceId}
+      initialName={props.workspaceName}
+      initial={{
+        id: props.workspaceId,
+        name: props.workspaceName,
+        logoUrl: props.initialBranding?.logoUrl ?? null,
+        logoUrlDark: props.initialBranding?.logoUrlDark ?? null,
+        logoColor: props.initialBranding?.logoColor ?? null,
+        showCompanyName: props.initialBranding?.showCompanyName !== false,
+      }}
+    >
+      <WorkspaceShellInner {...props} />
+    </WorkspaceBrandingProvider>
+  );
+}
+
+function WorkspaceShellInner({
   workspaceId,
   workspaceName,
   permissions,
@@ -359,6 +399,7 @@ export function WorkspaceShell({
   impersonating?: boolean;
   children: React.ReactNode;
 }) {
+  const branding = useWorkspaceBranding();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -370,6 +411,28 @@ export function WorkspaceShell({
   const [uncategorized, setUncategorized] = useState<BoardRow[]>([]);
   const [badges, setBadges] = useState<{ chatTotal?: number; email?: number }>({});
   const [profileTitle, setProfileTitle] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(
+    session?.user?.image || null,
+  );
+
+  useEffect(() => {
+    if (session?.user?.image) setAvatarUrl(session.user.image);
+  }, [session?.user?.image]);
+
+  useEffect(() => {
+    void fetch('/api/account/profile')
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.data?.avatarUrl) setAvatarUrl(j.data.avatarUrl);
+      })
+      .catch(() => undefined);
+    const onAvatar = (e: Event) => {
+      const url = (e as CustomEvent<{ url?: string | null }>).detail?.url;
+      if (url !== undefined) setAvatarUrl(url);
+    };
+    window.addEventListener('enterhub:avatar', onAvatar);
+    return () => window.removeEventListener('enterhub:avatar', onAvatar);
+  }, []);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -513,6 +576,7 @@ export function WorkspaceShell({
 
   return (
     <PresenceProvider workspaceId={workspaceId} userId={session?.user?.id}>
+      <MeetingCallProvider workspaceId={workspaceId}>
       <SafeAppShell
         nav={nav}
         routes={routes}
@@ -523,16 +587,20 @@ export function WorkspaceShell({
         profileMenuItems={[
           { id: 'account-profile', label: t('workspace.profile') },
           { id: 'account-settings', label: t('workspace.settings') },
+          { id: 'account-notifications', label: t('account.notificationsTab') },
           { id: 'account-help', label: t('workspace.help') },
         ]}
         profileDisplayName={session?.user?.name || session?.user?.email || t('workspace.profile')}
         profileSubtitle={
           profileTitle ? localizeRoleName(profileTitle, t) : undefined
-        }        topbar={({ isDark: dark, onMenuToggle }) => (
+        }
+        profileAvatarUrl={avatarUrl}
+        topbar={({ isDark: dark, onMenuToggle }) => (
           <WorkspaceTopbar
             workspaceId={workspaceId}
             isDark={dark}
             onMenuToggle={onMenuToggle}
+            avatarUrl={avatarUrl}
             canManageWorkspace={
               permissions.includes('workspace:update') ||
               permissions.includes('workspace:members') ||
@@ -547,6 +615,7 @@ export function WorkspaceShell({
       >
         {children}
       </SafeAppShell>
+      </MeetingCallProvider>
     </PresenceProvider>
   );
 }

@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isWorkspaceMember } from "@/lib/rbac";
 import { isChecklistBookend } from "@/lib/checklist-defaults";
+import { resolveProjectColor } from "@/lib/project-identity";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -25,10 +26,10 @@ function dueBucket(
 
 function listBucket(title: string): "todo" | "progress" | "review" | "done" | "other" {
   const t = title.toLowerCase();
-  if (/(done|complete|closed|shipped)/.test(t)) return "done";
-  if (/(review|qa|test)/.test(t)) return "review";
-  if (/(progress|doing|active|wip)/.test(t)) return "progress";
-  if (/(todo|backlog|ready|inbox)/.test(t)) return "todo";
+  if (/(done|complete|closed|shipped|تکمیل)/.test(t)) return "done";
+  if (/(on review|review|approval|pending|qa|test|بررسی)/.test(t)) return "review";
+  if (/(todo|backlog|ready|inbox|برای انجام)/.test(t)) return "todo";
+  if (/(progress|doing|active|wip|انجام)/.test(t)) return "progress";
   return "other";
 }
 
@@ -60,10 +61,26 @@ export async function GET(_req: Request, ctx: Ctx) {
             select: {
               id: true,
               title: true,
-              board: { select: { id: true, name: true, updatedAt: true } },
+              board: {
+                select: {
+                  id: true,
+                  name: true,
+                  updatedAt: true,
+                  color: true,
+                  background: true,
+                  isGeneral: true,
+                  department: {
+                    select: { id: true, name: true, key: true, color: true },
+                  },
+                },
+              },
             },
           },
-          checklistItems: { select: { id: true, title: true, isDone: true }, orderBy: { order: 'asc' as const } },
+          checklistItems: {
+            select: { id: true, title: true, isDone: true, description: true },
+            orderBy: { order: 'asc' as const },
+          },
+          supervisor: { select: { id: true, name: true, email: true, avatarUrl: true } },
           assignees: {
             include: {
               user: { select: { id: true, name: true, email: true, avatarUrl: true } },
@@ -140,10 +157,14 @@ export async function GET(_req: Request, ctx: Ctx) {
     const listStatus = listBucket(a.card.list.title);
     const workflowStatus = a.card.workflowStatus;
     let status = listStatus;
-    if (workflowStatus === "IN_PROGRESS" || workflowStatus === "PENDING_APPROVAL") {
-      status = workflowStatus === "PENDING_APPROVAL" ? "review" : "progress";
-    } else if (workflowStatus === "APPROVED") {
+    if (workflowStatus === "APPROVED") {
       status = "done";
+    } else if (workflowStatus === "PENDING_APPROVAL") {
+      status = listStatus === "done" ? "done" : "review";
+    } else if (workflowStatus === "IN_PROGRESS") {
+      status = listStatus === "review" ? "review" : "progress";
+    } else if (workflowStatus === "REJECTED") {
+      status = "progress";
     }
     progress[status] = (progress[status] || 0) + 1;
     if (a.card.dueDate && a.card.dueDate.getTime() < now && status !== "done") {
@@ -154,6 +175,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     const prev = projectMap.get(board.id) || {
       id: board.id,
       name: board.name,
+      isGeneral: Boolean(board.isGeneral),
       updatedAt: board.updatedAt.toISOString(),
       open: 0,
       done: 0,
@@ -182,7 +204,25 @@ export async function GET(_req: Request, ctx: Ctx) {
       startedAt: a.card.startedAt?.toISOString() ?? null,
       estimatedHours: a.card.estimatedHours,
       list: { id: a.card.list.id, title: a.card.list.title },
-      board: { id: board.id, name: board.name },
+      board: {
+        id: board.id,
+        name: board.name,
+        color: resolveProjectColor({
+          id: board.id,
+          color: board.color,
+          background: board.background,
+          departmentColor: board.department?.color,
+        }),
+        isGeneral: Boolean(board.isGeneral),
+        department: board.department
+          ? {
+              id: board.department.id,
+              name: board.department.name,
+              key: board.department.key,
+              color: board.department.color,
+            }
+          : null,
+      },
       labels: a.card.labels.map((cl) => ({
         id: cl.label.id,
         name: cl.label.name,
@@ -193,10 +233,18 @@ export async function GET(_req: Request, ctx: Ctx) {
         id: c.id,
         title: c.title,
         isDone: c.isDone,
+        description: c.description,
       })),
+      supervisor: a.card.supervisor
+        ? {
+            id: a.card.supervisor.id,
+            name: a.card.supervisor.name || a.card.supervisor.email || "",
+            avatarUrl: a.card.supervisor.avatarUrl,
+          }
+        : null,
       assignees: a.card.assignees.map((as) => ({
         id: as.user.id,
-        name: as.user.name || as.user.email || 'User',
+        name: as.user.name || as.user.email || "",
         avatarUrl: as.user.avatarUrl,
       })),
       commentCount: a.card._count.comments,

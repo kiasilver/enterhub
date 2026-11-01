@@ -12,30 +12,30 @@ import {
   listAccessibleDepartmentIds,
   departmentIcon,
 } from "@/lib/departments";
+import { assignDistinctProjectColors } from "@/lib/project-identity";
+import { isGeneralBoardName } from "@/lib/board-lists";
 
 const createBoardSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   visibility: z.enum(["PRIVATE", "WORKSPACE", "PUBLIC"]).optional(),
   departmentId: z.string().min(1).optional().nullable(),
+  observerIds: z.array(z.string().min(1)).max(50).optional(),
+  color: z
+    .string()
+    .regex(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+    .optional()
+    .nullable(),
+  icon: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9_]+$/)
+    .optional()
+    .nullable(),
 });
 
 type RouteContext = { params: Promise<{ id: string }> };
-
-const COVER_PALETTE = [
-  "#2563EB",
-  "#0EA5E9",
-  "#06B6D4",
-  "#14B8A6",
-  "#22C55E",
-  "#F59E0B",
-  "#F97316",
-  "#EF4444",
-  "#EC4899",
-  "#8B5CF6",
-  "#6366F1",
-  "#64748B",
-];
 
 function listBucket(title: string): "todo" | "progress" | "review" | "done" | "other" {
   const t = title.toLowerCase();
@@ -44,18 +44,6 @@ function listBucket(title: string): "todo" | "progress" | "review" | "done" | "o
   if (/(progress|doing|active|wip)/.test(t)) return "progress";
   if (/(todo|backlog|ready|inbox)/.test(t)) return "todo";
   return "other";
-}
-
-function coverColor(boardId: string, background: string | null): string {
-  if (background && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(background.trim())) {
-    return background.trim();
-  }
-  if (background && background.startsWith("http")) {
-    return COVER_PALETTE[0];
-  }
-  let hash = 0;
-  for (let i = 0; i < boardId.length; i++) hash = (hash * 31 + boardId.charCodeAt(i)) | 0;
-  return COVER_PALETTE[Math.abs(hash) % COVER_PALETTE.length];
 }
 
 function healthFromStats(
@@ -85,13 +73,26 @@ export async function GET(req: Request, context: RouteContext) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const [isManager, canAudit, canLead, accessible] = await Promise.all([
-    hasPermission(userId, workspaceId, "workspace:members"),
-    hasPermission(userId, workspaceId, "workspace:audit"),
-    hasPermission(userId, workspaceId, "board:settings"),
-    listAccessibleDepartmentIds(userId, workspaceId),
-  ]);
+  const [isManager, canAudit, canLead, accessible, canDeletePerm, leadDepts, canCreateTask] =
+    await Promise.all([
+      hasPermission(userId, workspaceId, "workspace:members"),
+      hasPermission(userId, workspaceId, "workspace:audit"),
+      hasPermission(userId, workspaceId, "board:settings"),
+      listAccessibleDepartmentIds(userId, workspaceId),
+      hasPermission(userId, workspaceId, "board:delete"),
+      prisma.departmentMember.findMany({
+        where: {
+          userId,
+          department: { workspaceId },
+          role: { in: ["MANAGER", "SUPERVISOR"] },
+        },
+        select: { departmentId: true },
+      }),
+      hasPermission(userId, workspaceId, "card:create"),
+    ]);
   const fullAccess = isManager || canAudit || canLead || accessible === "all";
+  const canDeleteAny = fullAccess || canDeletePerm;
+  const leadDeptIds = new Set(leadDepts.map((d) => d.departmentId));
 
   await ensureWorkspaceDepartments(workspaceId);
   await backfillBoardDepartments(workspaceId);
@@ -132,13 +133,26 @@ export async function GET(req: Request, context: RouteContext) {
       },
       lists: {
         where: { archivedAt: null },
+        orderBy: { order: "asc" },
         select: {
           title: true,
           cards: {
             where: { archivedAt: null },
+            orderBy: { order: "asc" },
             select: {
               id: true,
+              title: true,
+              description: true,
               dueDate: true,
+              priority: true,
+              workflowStatus: true,
+              startedAt: true,
+              supervisor: {
+                select: { id: true, name: true, email: true, avatarUrl: true },
+              },
+              createdBy: {
+                select: { id: true, name: true, email: true, avatarUrl: true },
+              },
               assignees: {
                 take: 8,
                 select: {
@@ -147,6 +161,14 @@ export async function GET(req: Request, context: RouteContext) {
                   },
                 },
               },
+              labels: {
+                include: { label: { select: { id: true, name: true, color: true } } },
+              },
+              checklistItems: {
+                orderBy: { order: "asc" },
+                select: { id: true, title: true, isDone: true, description: true },
+              },
+              _count: { select: { comments: true, attachments: true } },
             },
           },
         },
@@ -240,6 +262,7 @@ export async function GET(req: Request, context: RouteContext) {
     const departmentKey = b.department?.key ?? null;
     const departmentLabel = b.department?.name ?? "General";
     const departmentId = b.department?.id ?? null;
+    const isGeneral = Boolean(b.isGeneral) || isGeneralBoardName(b.name);
 
     return {
       id: b.id,
@@ -248,14 +271,19 @@ export async function GET(req: Request, context: RouteContext) {
       visibility: b.visibility,
       defaultView: b.defaultView,
       background: b.background,
-      coverColor: coverColor(b.id, b.background || b.department?.color || null),
+      color: b.color ?? null,
       coverImage:
         b.background && b.background.startsWith("http") ? b.background : null,
-      icon: b.department?.icon || (departmentKey ? departmentIcon(departmentKey) : "business"),
+      icon: b.icon ?? null,
       departmentId,
       departmentKey,
       departmentLabel,
       departmentColor: b.department?.color ?? null,
+      isGeneral,
+      canDelete:
+        !isGeneral &&
+        (canDeleteAny ||
+          (!!departmentId && leadDeptIds.has(departmentId))),
       updatedAt: b.updatedAt,
       archivedAt: b.archivedAt,
       listCount: b._count.lists,
@@ -274,8 +302,52 @@ export async function GET(req: Request, context: RouteContext) {
       manager,
       members: members.slice(0, 8),
       memberCount: members.length,
+      cards: b.lists.flatMap((l) =>
+        l.cards.map((c) => ({
+          id: c.id,
+          title: c.title,
+          description: c.description,
+          dueDate: c.dueDate?.toISOString() ?? null,
+          priority: c.priority,
+          workflowStatus: c.workflowStatus,
+          startedAt: c.startedAt?.toISOString() ?? null,
+          listTitle: l.title,
+          labels: c.labels.map((row) => row.label),
+          assignees: c.assignees.map((a) => a.user),
+          supervisor: c.supervisor,
+          createdBy: c.createdBy,
+          checklistItems: c.checklistItems,
+          commentCount: c._count.comments,
+          attachmentCount: c._count.attachments,
+        })),
+      ),
     };
   });
+
+  // Unique accents within each department column (avoid hash collisions)
+  const byDept = new Map<string, typeof data>();
+  for (const row of data) {
+    const key = row.departmentId || "__general__";
+    const list = byDept.get(key) || [];
+    list.push(row);
+    byDept.set(key, list);
+  }
+  const colored: typeof data = [];
+  for (const [, group] of byDept) {
+    const deptColor = group[0]?.departmentColor ?? null;
+    colored.push(
+      ...assignDistinctProjectColors(group, deptColor).map((row) => ({
+        ...row,
+        // assignDistinct adds coverColor; keep full board payload
+      })),
+    );
+  }
+  // Preserve original order
+  const colorById = new Map(colored.map((r) => [r.id, r.coverColor]));
+  const dataWithColors = data.map((row) => ({
+    ...row,
+    coverColor: colorById.get(row.id) || "#2563EB",
+  }));
 
   const folders = [
     ...deptRows.map((d) => ({
@@ -295,13 +367,14 @@ export async function GET(req: Request, context: RouteContext) {
   ];
 
   return NextResponse.json({
-    data,
+    data: dataWithColors,
     meta: {
       departments: folders,
       managers: [...managerOptions.values()].sort((a, b) =>
         a.name.localeCompare(b.name),
       ),
       archivedOnly,
+      canCreateTask,
     },
   });
 }
@@ -350,11 +423,10 @@ export async function POST(req: Request, context: RouteContext) {
   }
 
   let departmentId = parsed.data.departmentId ?? null;
-  let background: string | null = null;
   if (departmentId) {
     const dept = await prisma.department.findFirst({
       where: { id: departmentId, workspaceId, archivedAt: null },
-      select: { id: true, color: true },
+      select: { id: true },
     });
     if (!dept) {
       return NextResponse.json(
@@ -365,9 +437,22 @@ export async function POST(req: Request, context: RouteContext) {
     if (!(await canAccessDepartment(userId, workspaceId, departmentId))) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    background = dept.color || null;
   } else {
     departmentId = null;
+  }
+
+  const visibility = parsed.data.visibility ?? "WORKSPACE";
+  let observerIds: string[] = [];
+  if (visibility === "PRIVATE" && parsed.data.observerIds?.length) {
+    const members = await prisma.workspaceMember.findMany({
+      where: {
+        workspaceId,
+        userId: { in: parsed.data.observerIds },
+        status: "ACTIVE",
+      },
+      select: { userId: true },
+    });
+    observerIds = members.map((m) => m.userId);
   }
 
   const board = await prisma.board.create({
@@ -375,16 +460,26 @@ export async function POST(req: Request, context: RouteContext) {
       workspaceId,
       name: parsed.data.name,
       description: parsed.data.description,
-      visibility: parsed.data.visibility ?? "WORKSPACE",
+      visibility,
       departmentId,
-      background,
+      color: parsed.data.color || null,
+      icon: parsed.data.icon || null,
       lists: {
         create: [
           { title: "To Do", order: 0 },
           { title: "In Progress", order: 1 },
-          { title: "Done", order: 2 },
+          { title: "On Review", order: 2 },
+          { title: "Done", order: 3 },
         ],
       },
+      guests: observerIds.length
+        ? {
+            create: observerIds.map((userId) => ({
+              userId,
+              accessLevel: "READ_ONLY" as const,
+            })),
+          }
+        : undefined,
     },
   });
 
@@ -398,6 +493,15 @@ export async function POST(req: Request, context: RouteContext) {
   });
 
   emitToBoardRoom(board.id, "card-updated", { type: "board.created", boardId: board.id });
+
+  const { publishBoardLive } = await import("@/lib/boards-live-bus");
+  publishBoardLive({
+    type: "board.changed",
+    workspaceId,
+    boardId: board.id,
+    departmentId: board.departmentId,
+    reason: "created",
+  });
 
   return NextResponse.json({ data: board }, { status: 201 });
 }

@@ -6,6 +6,8 @@ import { Search, BookOpen, CreditCard, Shield, FileText, ChevronDown, Send, Mail
 import { textPrimary, textSecondary, textMuted, glassStyle, borderSubtle } from './theme';
 import SafeAccountShell, { accountFadeUp, iconTile, getIconColors } from './SafeAccountShell';
 import { useTheme } from '@/components/ThemeProvider/ThemeProvider';
+import { useLang } from '@/components/LanguageProvider/LanguageProvider';
+import Link from 'next/link';
 
 interface Props { isDark: boolean; setActivePage: (id: string) => void; }
 
@@ -49,6 +51,7 @@ const FAQS: Faq[] = [
 ];
 
 export default function SafeAccountHelp({ isDark, setActivePage }: Props) {
+  const { t } = useLang();
   const { primaryColor } = useTheme();
   const ACCENT = primaryColor;
   const ICON_COLORS = getIconColors(primaryColor);
@@ -69,6 +72,24 @@ export default function SafeAccountHelp({ isDark, setActivePage }: Props) {
 
   return (
     <SafeAccountShell isDark={isDark} active="account-help" setActivePage={setActivePage}>
+
+      <motion.div variants={accountFadeUp}>
+        <Link
+          href="/guide"
+          className="block rounded-3xl p-5 mb-2"
+          style={{ ...glassStyle(isDark), borderColor: `${ACCENT}66` }}
+        >
+          <p className="text-[11px] font-black uppercase tracking-wider mb-1" style={{ color: mut }}>
+            {t('guidePage.eyebrow')}
+          </p>
+          <h2 className="text-[17px] font-bold" style={{ color: pri }}>
+            {t('guidePage.title')}
+          </h2>
+          <p className="text-[13px] mt-1" style={{ color: sec }}>
+            {t('guidePage.subtitle')}
+          </p>
+        </Link>
+      </motion.div>
 
       {/* Search */}
       <motion.div variants={accountFadeUp}>
